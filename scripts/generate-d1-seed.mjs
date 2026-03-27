@@ -1,8 +1,8 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-const sourceFile = resolve(process.cwd(), 'src/data/content.i18n.json');
-const outputFile = resolve(process.cwd(), 'db/seed.sql');
+const sourceFile = resolve(process.cwd(), '../resume-db/source/content.i18n.json');
+const outputFile = resolve(process.cwd(), '../resume-db/db/seed.sql');
 
 const raw = await readFile(sourceFile, 'utf8');
 const content = JSON.parse(raw);
