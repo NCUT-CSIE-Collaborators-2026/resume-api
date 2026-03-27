@@ -1,56 +1,69 @@
-import 'dotenv/config';
-import { resolve } from 'node:path';
-import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
 import { Hono } from 'hono';
-import { createContentRepository } from './content-repository.js';
+ 
+type Env = {
+  DB: D1Database;
+  CORS_ORIGINS?: string;
+};
 
-const app = new Hono();
-const port = Number(process.env.PORT ?? 8787);
-const apiBasePath = process.env.API_BASE_PATH ?? '/api/resume';
-const dataFile = resolve(
-  process.cwd(),
-  process.env.DATA_FILE_PATH ?? '../resume-db/source/content.i18n.json',
-);
-const dbPath = process.env.DB_PATH ?? '../resume-db/data/resume.db';
-const autoMigrateJsonToDb =
-  (process.env.AUTO_MIGRATE_JSON_TO_DB ?? 'true').toLowerCase() === 'true';
-const corsOrigins = (process.env.CORS_ORIGINS ??
-  'http://localhost:4200,https://haolun-wang.pages.dev')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter((origin) => origin.length > 0);
+const DEFAULT_CORS_ORIGINS =
+  'http://localhost:4200,https://haolun-wang.pages.dev';
 
-const corsOriginOption =
-  corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins;
+const app = new Hono<{ Bindings: Env }>();
 
-const repository = createContentRepository({
-  dbPath,
-  jsonDataFilePath: dataFile,
-  autoMigrateJsonToDb,
-});
-
-await repository.bootstrap();
+const getCorsOrigins = (env: Env): string[] => {
+  return (env.CORS_ORIGINS ?? DEFAULT_CORS_ORIGINS)
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+};
 
 app.use(
-  `${apiBasePath}/*`,
-  cors({
-    origin: corsOriginOption,
-    allowMethods: ['GET', 'OPTIONS'],
-    allowHeaders: ['Content-Type'],
-  }),
+  '*',
+  async (c, next) => {
+    const corsOrigins = getCorsOrigins(c.env);
+    const corsOriginOption =
+      corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins;
+
+    const corsMiddleware = cors({
+      origin: corsOriginOption,
+      allowMethods: ['GET', 'POST', 'OPTIONS'],
+      allowHeaders: ['Content-Type'],
+    });
+
+    return corsMiddleware(c, next);
+  },
 );
 
-app.get(`${apiBasePath}/health`, (c) => c.json({ ok: true }));
+app.get('/api/resume/health', (c) => {
+  return c.json({ ok: true, runtime: 'cloudflare-workers' });
+});
 
-app.get(`${apiBasePath}/content.i18n`, async (c) => {
+app.get('/api/resume/content.i18n', async (c) => {
   try {
-    const content = repository.getAll();
+    const rows = await c.env.DB.prepare(
+      'SELECT lang_code, payload FROM resume_i18n_content ORDER BY lang_code',
+    ).all<{ lang_code: string; payload: string }>();
+
+    const content: Record<string, unknown> = {};
+    for (const row of rows.results ?? []) {
+      content[row.lang_code] = JSON.parse(row.payload);
+    }
+
+    if (!content.en || !content.zh_TW) {
+      return c.json(
+        {
+          message: 'D1 content missing required locales: en, zh_TW',
+        },
+        500,
+      );
+    }
+
     return c.json(content);
   } catch (error) {
     return c.json(
       {
-        message: 'Failed to read i18n content from SQLite',
+        message: 'Failed to read i18n content from D1',
         error: error instanceof Error ? error.message : 'Unknown error',
       },
       500,
@@ -58,31 +71,4 @@ app.get(`${apiBasePath}/content.i18n`, async (c) => {
   }
 });
 
-app.post(`${apiBasePath}/content.i18n/sync`, async (c) => {
-  try {
-    await repository.syncFromJson();
-    return c.json({ ok: true, message: 'Synced JSON to SQLite' });
-  } catch (error) {
-    return c.json(
-      {
-        message: 'Failed to sync JSON to SQLite',
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      500,
-    );
-  }
-});
-
-serve(
-  {
-    fetch: app.fetch,
-    port,
-  },
-  (info) => {
-    console.log(`Hono API listening on http://localhost:${info.port}`);
-    console.log(`API base path: ${apiBasePath}`);
-    console.log(`CORS origins: ${corsOrigins.join(', ')}`);
-    console.log(`DB path: ${dbPath}`);
-    console.log(`AUTO_MIGRATE_JSON_TO_DB: ${autoMigrateJsonToDb}`);
-  },
-);
+export default app;

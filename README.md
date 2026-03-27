@@ -1,84 +1,85 @@
 # Resume API (Hono)
 
-Standalone backend API for resume-skeleton.
+Cloudflare Workers + D1 backend API for resume-skeleton.
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env
 npm run dev
 ```
 
-Server default: `http://localhost:8787`
-
-## Environment Variables
-
-Set values in `.env` (or copy from `.env.example`):
-
-- `PORT`: API server port (default `8787`)
-- `API_BASE_PATH`: route prefix (default `/api/resume`)
-- `CORS_ORIGINS`: comma-separated allowed origins
-- `DATA_FILE_PATH`: external JSON source path (default `../resume-db/source/content.i18n.json`)
-- `DB_PATH`: SQLite path (default `../resume-db/data/resume.db`)
-- `AUTO_MIGRATE_JSON_TO_DB`: auto-import JSON when DB is empty
+Local dev runs with Wrangler.
 
 ## Endpoints
 
 - `GET /api/resume/health`
 - `GET /api/resume/content.i18n`
-- `POST /api/resume/content.i18n/sync`
 
-## Unified Local DB Mode
+## Workers Config
 
-Runtime source of truth is now local SQLite (same SQLite family as Cloudflare D1).
+Main config file: `wrangler.toml`
 
-- DB file: `../resume-db/data/resume.db`
-- Source JSON: `../resume-db/source/content.i18n.json`
-- On startup: if DB table is empty and `AUTO_MIGRATE_JSON_TO_DB=true`, JSON seed will auto-import.
+- `name`: Worker name
+- `main`: `src/index.ts`
+- `[[d1_databases]]`: D1 binding (`DB`)
+- `[vars]`: non-secret runtime vars (e.g. `CORS_ORIGINS`)
 
-Manual sync from JSON to SQLite:
+Current D1 binding is configured in `wrangler.toml`:
 
-```bash
-npm run db:sync:json
-```
+- `database_id = "41be8a01-6d89-4bb8-8dea-84bc002a1175"`
 
-## Cloudflare D1 (Free Tier)
+If you create a new D1 database later, update this value accordingly.
 
-This project now includes D1-ready SQL assets:
+## D1 Data Source
 
-- Schema: `../resume-db/db/schema.sql`
-- Seed data: `../resume-db/db/seed.sql`
-- Read query: `../resume-db/db/query-content.sql`
+DB assets are maintained in sibling project `../resume-db`:
 
-### 1) Regenerate seed from JSON source
+- `../resume-db/db/schema.sql`
+- `../resume-db/db/seed.sql`
+- `../resume-db/source/content.i18n.json`
+
+Regenerate seed SQL from source JSON:
 
 ```bash
 npm run db:seed:generate
 ```
 
-This converts `../resume-db/source/content.i18n.json` into SQL inserts for D1.
-
-### 2) Create D1 database
+## Create and Seed D1
 
 ```bash
 npx wrangler d1 create resume-api-db
-```
-
-### 3) Apply schema and seed (remote)
-
-```bash
 npx wrangler d1 execute resume-api-db --remote --file=../resume-db/db/schema.sql
 npx wrangler d1 execute resume-api-db --remote --file=../resume-db/db/seed.sql
 ```
 
-### 4) Verify data in D1
+Verify:
 
 ```bash
 npx wrangler d1 execute resume-api-db --remote --command "SELECT lang_code, length(payload) AS payload_size FROM resume_i18n_content;"
 ```
 
-## Build
+## Deploy (CLI)
+
+```bash
+npm run deploy
+```
+
+## Deploy (Cloudflare Git UI)
+
+For the screen you shared, use:
+
+- Project name: `resume-api`
+- Build command: leave empty (or `npm run build`)
+- Deploy command: `npx wrangler deploy`
+- Root directory: `resume-api`
+
+Then in Cloudflare project settings:
+
+- Add D1 binding `DB`
+- Set `CORS_ORIGINS` variable if needed
+
+## Type Check
 
 ```bash
 npm run build

@@ -15,7 +15,6 @@ const escapeSqlText = (text) => text.replace(/'/g, "''");
 
 const statements = [
   '-- Generated from src/data/content.i18n.json',
-  "BEGIN TRANSACTION;",
   "DELETE FROM resume_i18n_content;",
 ];
 
@@ -29,7 +28,6 @@ for (const [langCode, payload] of Object.entries(content)) {
   );
 }
 
-statements.push('COMMIT;');
 statements.push('');
 
 await writeFile(outputFile, statements.join('\n'), 'utf8');

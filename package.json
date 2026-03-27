@@ -4,22 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node --enable-source-maps dist/index.js",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
     "build": "tsc -p tsconfig.json",
-    "db:seed:generate": "node scripts/generate-d1-seed.mjs",
-    "db:sync:json": "tsx src/scripts/sync-json-to-db.ts"
+    "deploy": "wrangler deploy",
+    "db:seed:generate": "node scripts/generate-d1-seed.mjs"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.7",
-    "better-sqlite3": "^11.8.1",
-    "dotenv": "^16.6.1",
     "hono": "^4.9.8"
   },
   "devDependencies": {
-    "@types/node": "^22.15.21",
-    "@types/better-sqlite3": "^7.6.12",
-    "tsx": "^4.20.6",
-    "typescript": "^5.8.3"
+    "@cloudflare/workers-types": "^4.0.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.8.0"
   }
 }

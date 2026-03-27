@@ -1,0 +1,2 @@
+# Optional local overrides for wrangler dev
+# CORS_ORIGINS=http://localhost:4200,https://haolun-wang.pages.dev
