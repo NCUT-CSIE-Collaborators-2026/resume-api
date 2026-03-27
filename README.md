@@ -1,86 +1,136 @@
 # Resume API (Hono)
 
-Cloudflare Workers + D1 backend API for resume-skeleton.
+`resume-skeleton` 使用的後端 API，採用 Cloudflare Workers + D1。
 
-## Setup
+## 專案功能
+
+- 根路由回傳服務資訊：`GET /`
+- 提供履歷 API：`GET /api/resume/health`
+- 提供 i18n 內容 API：`GET /api/resume/content.i18n`
+- 提供 OpenAPI 文件：`GET /api/resume/openapi.json`
+- 提供 Swagger UI：`GET /api/resume/docs`
+- 後端資料來源為 D1 資料表 `resume_i18n_content`
+
+## 安裝與本地啟動
 
 ```bash
 npm install
 npm run dev
 ```
 
-Local dev runs with Wrangler.
+如需讓 Docker 內的 Nginx 反向代理連到本地 Worker，請改用：
 
-## Endpoints
+```bash
+npx wrangler dev --local --ip 0.0.0.0 --port 8787
+```
 
-- `GET /api/resume/health`
-- `GET /api/resume/content.i18n`
+## 主要設定檔
 
-## Workers Config
+主設定檔為 `wrangler.toml`：
 
-Main config file: `wrangler.toml`
+- `name`：Worker 名稱
+- `main`：入口檔（`src/index.ts`）
+- `[[d1_databases]]`：D1 綁定（目前為 `DB`）
+- `[vars]`：非機密環境變數（例如 `CORS_ORIGINS`）
 
-- `name`: Worker name
-- `main`: `src/index.ts`
-- `[[d1_databases]]`: D1 binding (`DB`)
-- `[vars]`: non-secret runtime vars (e.g. `CORS_ORIGINS`)
+目前 D1 綁定已設定：
 
-Current D1 binding is configured in `wrangler.toml`:
-
+- `database_name = "resume-api-db"`
 - `database_id = "41be8a01-6d89-4bb8-8dea-84bc002a1175"`
 
-If you create a new D1 database later, update this value accordingly.
+若未來更換 D1，請同步更新 `database_id`。
 
-## D1 Data Source
+## D1 資料來源
 
-DB assets are maintained in sibling project `../resume-db`:
+資料檔集中在兄弟專案 `../resume-db`：
 
 - `../resume-db/db/schema.sql`
 - `../resume-db/db/seed.sql`
 - `../resume-db/source/content.i18n.json`
 
-Regenerate seed SQL from source JSON:
+若 JSON 有更新，先重新產生 seed：
 
 ```bash
 npm run db:seed:generate
 ```
 
-## Create and Seed D1
+注意：`seed.sql` 已調整為 D1 遠端可執行格式（不含 `BEGIN TRANSACTION` / `COMMIT`）。
+
+## D1 建立與灌資料
+
+### 建立 D1（只需一次）
 
 ```bash
 npx wrangler d1 create resume-api-db
-npx wrangler d1 execute resume-api-db --remote --file=../resume-db/db/schema.sql
-npx wrangler d1 execute resume-api-db --remote --file=../resume-db/db/seed.sql
 ```
 
-Verify:
+### 灌遠端 D1（正式環境）
 
 ```bash
-npx wrangler d1 execute resume-api-db --remote --command "SELECT lang_code, length(payload) AS payload_size FROM resume_i18n_content;"
+npx wrangler d1 execute resume-api-db --remote --file=../resume-db/db/schema.sql --yes
+npx wrangler d1 execute resume-api-db --remote --file=../resume-db/db/seed.sql --yes
 ```
 
-## Deploy (CLI)
+### 驗證遠端資料
+
+```bash
+npx wrangler d1 execute resume-api-db --remote --command "SELECT lang_code, length(payload) AS payload_size FROM resume_i18n_content ORDER BY lang_code;" --yes
+```
+
+### 本地 D1（開發）
+
+```bash
+npx wrangler d1 execute resume-api-db --local --file=../resume-db/db/schema.sql
+npx wrangler d1 execute resume-api-db --local --file=../resume-db/db/seed.sql
+```
+
+## 部署
+
+### CLI 部署
 
 ```bash
 npm run deploy
 ```
 
-## Deploy (Cloudflare Git UI)
+### Cloudflare Git 直連部署
 
-For the screen you shared, use:
+若你是從 Cloudflare Dashboard 直接連 GitHub 建專案，部署由 Cloudflare 平台代跑，不需要把 Token 放進此 repo。
 
-- Project name: `resume-api`
-- Build command: leave empty (or `npm run build`)
-- Deploy command: `npx wrangler deploy`
-- Root directory: `resume-api`
+建議設定：
 
-Then in Cloudflare project settings:
+- Project name：`resume-api`
+- Root directory：`resume-api`
+- Build command：可留空（或 `npm run build`）
+- Deploy command：`npx wrangler deploy`
 
-- Add D1 binding `DB`
-- Set `CORS_ORIGINS` variable if needed
+並在 Cloudflare 專案設定補上：
 
-## Type Check
+- D1 binding：`DB` -> `resume-api-db`
+- 變數：`CORS_ORIGINS`（依你的前端網域調整）
+
+## 型別檢查
 
 ```bash
 npm run build
+```
+
+## 常見問題
+
+### 1) `Authentication error [code: 10000]`
+
+代表 Wrangler 權限不足或 Token 設定錯誤。若使用 CLI 遠端操作，請確認：
+
+- `CLOUDFLARE_API_TOKEN` 權限至少含：
+	- Account / Workers Scripts / Edit
+	- Account / D1 / Edit
+	- Account / Account Settings / Read
+	- User / Memberships / Read
+- `CLOUDFLARE_ACCOUNT_ID` 是否為正確帳號
+
+### 2) 本地 API 經過 Nginx 回 502
+
+請確認 Worker 不是只綁在 `127.0.0.1`，要用：
+
+```bash
+npx wrangler dev --local --ip 0.0.0.0 --port 8787
 ```

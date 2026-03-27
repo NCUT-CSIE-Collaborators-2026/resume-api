@@ -11,6 +11,7 @@
     "db:seed:generate": "node scripts/generate-d1-seed.mjs"
   },
   "dependencies": {
+    "@hono/swagger-ui": "^0.6.1",
     "hono": "^4.9.8"
   },
   "devDependencies": {
