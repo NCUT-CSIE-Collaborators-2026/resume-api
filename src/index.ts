@@ -11,6 +11,7 @@ type Env = {
   GOOGLE_OAUTH_SCOPES?: string;
   GOOGLE_OAUTH_SUCCESS_REDIRECT?: string;
   GOOGLE_OAUTH_FAILURE_REDIRECT?: string;
+  GOOGLE_OAUTH_DEBUG_RESPONSE?: string;
   JWT_SECRET?: string;
 };
 
@@ -535,6 +536,9 @@ app.get("/api/resume/auth/google/login", async (c) => {
 });
 
 app.get("/api/resume/auth/google/callback", async (c) => {
+  const debugResponseEnabled =
+    (c.env.GOOGLE_OAUTH_DEBUG_RESPONSE ?? "").toLowerCase() === "true";
+
   const config = getGoogleOAuthConfig(c.env);
   if (!config) {
     return c.json(
@@ -550,6 +554,14 @@ app.get("/api/resume/auth/google/callback", async (c) => {
   const code = requestUrl.searchParams.get("code");
   const state = requestUrl.searchParams.get("state");
   const error = requestUrl.searchParams.get("error");
+
+  console.log("[OAuth Callback] 收到 callback", {
+    hasCode: Boolean(code),
+    hasState: Boolean(state),
+    error: error ?? null,
+    redirectUri: config.redirectUri,
+    debugResponseEnabled,
+  });
 
   if (error) {
     const failureRedirect = c.env.GOOGLE_OAUTH_FAILURE_REDIRECT;
@@ -602,6 +614,14 @@ app.get("/api/resume/auth/google/callback", async (c) => {
     error_description?: string;
   };
 
+  console.log("[OAuth Callback] token exchange", {
+    ok: tokenResponse.ok,
+    status: tokenResponse.status,
+    hasAccessToken: Boolean(tokenPayload.access_token),
+    hasIdToken: Boolean(tokenPayload.id_token),
+    error: tokenPayload.error ?? null,
+  });
+
   if (!tokenResponse.ok || !tokenPayload.access_token) {
     return c.json(
       {
@@ -625,11 +645,43 @@ app.get("/api/resume/auth/google/callback", async (c) => {
   const profile = (await profileResponse.json()) as Record<string, unknown>;
   const email = typeof profile.email === "string" ? profile.email.trim() : "";
 
+  console.log("[OAuth Callback] userinfo", {
+    status: profileResponse.status,
+    email: email || null,
+    name: typeof profile.name === "string" ? profile.name : null,
+  });
+
   if (!email) {
     return c.json({ message: "Google account email missing" }, 403);
   }
 
   const emailAllowed = await isAllowedLoginEmail(c.env.DB, email);
+
+  if (debugResponseEnabled) {
+    return c.json(
+      {
+        debug: true,
+        oauth: {
+          token_exchange_status: tokenResponse.status,
+          has_access_token: Boolean(tokenPayload.access_token),
+          has_id_token: Boolean(tokenPayload.id_token),
+          token_type: tokenPayload.token_type ?? null,
+          expires_in: tokenPayload.expires_in ?? null,
+        },
+        google_profile: {
+          email,
+          name: typeof profile.name === "string" ? profile.name : null,
+          picture:
+            typeof profile.picture === "string" ? profile.picture : null,
+        },
+        access_check: {
+          email_allowed_in_d1: emailAllowed,
+        },
+      },
+      200,
+    );
+  }
+
   if (!emailAllowed) {
     return c.json(
       {
