@@ -258,10 +258,16 @@ const signState = async (payload: string, secret: string): Promise<string> => {
   return encodeBase64Url(new Uint8Array(signatureBuffer));
 };
 
-const generateSignedState = async (secret: string): Promise<string> => {
+const generateSignedState = async (
+  secret: string,
+  postLoginRedirect?: string,
+): Promise<string> => {
   const now = Math.floor(Date.now() / 1000).toString();
   const nonce = generateState();
-  const payload = `${now}.${nonce}`;
+  const encodedRedirect = postLoginRedirect
+    ? encodeBase64Url(getTextBytes(postLoginRedirect))
+    : "-";
+  const payload = `${now}.${nonce}.${encodedRedirect}`;
   const signature = await signState(payload, secret);
 
   return `${payload}.${signature}`;
@@ -326,19 +332,23 @@ const verifyJwt = async (
 const validateSignedState = async (
   state: string,
   secret: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> => {
+): Promise<
+  | { ok: true; postLoginRedirect: string | null }
+  | { ok: false; reason: string }
+> => {
   const parts = state.split(".");
-  if (parts.length !== 3) {
+  if (parts.length !== 4) {
     return { ok: false, reason: "state_format_invalid" };
   }
 
-  const [issuedAtRaw, nonce, signature] = parts;
+  const [issuedAtRaw, nonce, encodedRedirect, signature] = parts;
   const issuedAt = Number(issuedAtRaw);
 
   if (
     !Number.isFinite(issuedAt) ||
     issuedAt <= 0 ||
     nonce.length === 0 ||
+    encodedRedirect.length === 0 ||
     signature.length === 0
   ) {
     return { ok: false, reason: "state_payload_invalid" };
@@ -349,14 +359,23 @@ const validateSignedState = async (
     return { ok: false, reason: "state_expired_or_clock_skew" };
   }
 
-  const payload = `${issuedAtRaw}.${nonce}`;
+  const payload = `${issuedAtRaw}.${nonce}.${encodedRedirect}`;
   const expectedSignature = await signState(payload, secret);
 
   if (expectedSignature !== signature) {
     return { ok: false, reason: "state_signature_mismatch" };
   }
 
-  return { ok: true };
+  if (encodedRedirect === "-") {
+    return { ok: true, postLoginRedirect: null };
+  }
+
+  try {
+    const redirect = decodeBase64UrlToText(encodedRedirect);
+    return { ok: true, postLoginRedirect: redirect };
+  } catch {
+    return { ok: false, reason: "state_redirect_decode_failed" };
+  }
 };
 
 const getCookieValue = (
@@ -629,17 +648,7 @@ app.use("*", async (c, next) => {
 });
 
 app.get("/", (c) => {
-  const url = new URL(c.req.url);
-  const baseUrl = `${url.protocol}//${url.host}`;
-
-  return c.json({
-    name: "resume-api",
-    version: "1.0.0",
-    runtime: "cloudflare-workers",
-    docs_url: `${baseUrl}/api/resume/docs`,
-    openapi_url: `${baseUrl}/api/resume/openapi.json`,
-    health_url: `${baseUrl}/api/resume/health`,
-  });
+  return c.redirect("/api/resume/docs", 302);
 });
 
 app.get("/api/resume/openapi.json", (c) => {
@@ -813,7 +822,24 @@ app.get("/api/resume/auth/google/login", async (c) => {
   console.log("[OAuth Login] redirectUri:", config.redirectUri);
   console.log("[OAuth Login] scopes:", config.scopes);
 
-  const state = await generateSignedState(config.clientSecret);
+  const currentOrigin = new URL(c.req.url).origin;
+  const refererHeader = c.req.header("referer") ?? "";
+  let refererOrigin: string | null = null;
+  try {
+    refererOrigin = refererHeader ? new URL(refererHeader).origin : null;
+  } catch {
+    refererOrigin = null;
+  }
+
+  let postLoginRedirect: string;
+  if (refererOrigin && refererOrigin !== currentOrigin) {
+    postLoginRedirect =
+      c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT ?? `${currentOrigin}/api/resume/docs`;
+  } else {
+    postLoginRedirect = `${currentOrigin}/api/resume/docs`;
+  }
+
+  const state = await generateSignedState(config.clientSecret, postLoginRedirect);
   console.log("[OAuth Login] ✓ 產生 state:", state.substring(0, 20) + "...");
 
   const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -1023,7 +1049,8 @@ app.get("/api/resume/auth/google/callback", async (c) => {
   );
   c.header("Set-Cookie", buildSessionCookie(sessionToken, useSecureCookie));
 
-  const successRedirect = c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT;
+  const successRedirect =
+    stateValidation.postLoginRedirect ?? c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT;
   if (successRedirect) {
     const redirectUrl = new URL(successRedirect);
     redirectUrl.searchParams.set("login", "ok");
