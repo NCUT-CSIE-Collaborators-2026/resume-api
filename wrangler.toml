@@ -4,7 +4,9 @@ compatibility_date = "2026-03-27"
 workers_dev = true
 
 [vars]
-CORS_ORIGINS = "http://localhost:4200,https://haolun-wang.pages.dev"
+CORS_ORIGINS = "http://10.140.58.27,http://127.0.0.1:8787,https://haolun-wang.pages.dev,https://resume-api-haolun-wang.9b117201.workers.dev"
+GOOGLE_OAUTH_SCOPES = "openid email profile"
+
 
 [[d1_databases]]
 binding = "DB"
