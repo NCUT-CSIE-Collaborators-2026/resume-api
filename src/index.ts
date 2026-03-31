@@ -174,7 +174,9 @@ const decodeBase64UrlToText = (input: string): string => {
   const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
   const padding =
     base64.length % 4 === 0 ? "" : "=".repeat(4 - (base64.length % 4));
-  return atob(base64 + padding);
+  const binary = atob(base64 + padding);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 };
 
 const generateState = (): string => {
