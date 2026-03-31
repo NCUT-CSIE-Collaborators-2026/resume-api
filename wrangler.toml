@@ -6,7 +6,7 @@ workers_dev = true
 [vars]
 CORS_ORIGINS = "http://10.140.58.27,http://127.0.0.1:8787,https://haolun-wang.pages.dev,https://resume-api-haolun-wang.9b117201.workers.dev"
 GOOGLE_OAUTH_SCOPES = "openid email profile"
-GOOGLE_OAUTH_DEBUG_RESPONSE = "true"
+GOOGLE_OAUTH_DEBUG_RESPONSE = "false"
 
 
 [[d1_databases]]
