@@ -343,13 +343,15 @@ const buildSessionCookie = (
   token: string,
   useSecureCookie: boolean,
 ): string => {
-  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}${
+  const sameSite = useSecureCookie ? "None" : "Lax";
+  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${SESSION_TTL_SECONDS}${
     useSecureCookie ? "; Secure" : ""
   }`;
 };
 
 const clearSessionCookie = (useSecureCookie: boolean): string => {
-  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${useSecureCookie ? "; Secure" : ""}`;
+  const sameSite = useSecureCookie ? "None" : "Lax";
+  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${useSecureCookie ? "; Secure" : ""}`;
 };
 
 const isAllowedLoginEmail = async (
