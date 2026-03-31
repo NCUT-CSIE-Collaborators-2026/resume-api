@@ -15,6 +15,18 @@ type Env = {
   JWT_SECRET?: string;
 };
 
+type LangCode = "en" | "zh_TW";
+
+type EditableCardRequest = {
+  lang: LangCode;
+  introMode?: "30" | "60";
+  card: {
+    id: string;
+    subtitle?: string;
+    elements?: Array<Record<string, unknown>>;
+  };
+};
+
 const DEFAULT_CORS_ORIGINS =
   "http://localhost:4200,https://haolun-wang.pages.dev";
 const DEFAULT_GOOGLE_OAUTH_SCOPES = "openid email profile";
@@ -79,6 +91,42 @@ const openApiDocument = {
           "500": {
             description: "Content query failed",
           },
+        },
+      },
+    },
+    "/api/resume/content.card/update": {
+      post: {
+        summary: "Update one editable resume card",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  lang: { type: "string", enum: ["en", "zh_TW"] },
+                  introMode: { type: "string", enum: ["30", "60"] },
+                  card: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string" },
+                      subtitle: { type: "string" },
+                      elements: { type: "array", items: { type: "object" } },
+                    },
+                    required: ["id", "elements"],
+                  },
+                },
+                required: ["lang", "card"],
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Card updated" },
+          "400": { description: "Invalid payload" },
+          "401": { description: "Not authenticated" },
+          "404": { description: "Locale not found" },
+          "500": { description: "Update failed" },
         },
       },
     },
@@ -370,6 +418,170 @@ const isAllowedLoginEmail = async (
   return Boolean(row?.lang_code);
 };
 
+const getElementByType = (
+  elements: Array<Record<string, unknown>>,
+  type: string,
+): Record<string, unknown> | null => {
+  for (const element of elements) {
+    if (typeof element.type === "string" && element.type === type) {
+      return element;
+    }
+  }
+  return null;
+};
+
+const toStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+};
+
+const parseGroupItemValues = (element: Record<string, unknown>): string[] => {
+  const groups = Array.isArray(element.groups)
+    ? (element.groups as Array<Record<string, unknown>>)
+    : [];
+
+  const values: string[] = [];
+  for (const group of groups) {
+    const items = Array.isArray(group.items)
+      ? (group.items as Array<Record<string, unknown>>)
+      : [];
+    for (const item of items) {
+      if (typeof item.value === "string") {
+        values.push(item.value);
+      }
+    }
+  }
+
+  return values;
+};
+
+const applyEditableCardUpdate = (
+  payload: Record<string, unknown>,
+  request: EditableCardRequest,
+): void => {
+  const card = request.card;
+  const elements = Array.isArray(card.elements)
+    ? card.elements
+    : [];
+
+  if (card.id === "profile") {
+    const profile =
+      typeof payload.profile === "object" && payload.profile !== null
+        ? (payload.profile as Record<string, unknown>)
+        : {};
+
+    if (typeof card.subtitle === "string") {
+      profile.status = card.subtitle;
+    }
+
+    const badgesElement = getElementByType(elements, "badges");
+    if (badgesElement) {
+      const badgeItems = toStringArray(badgesElement.items);
+      if (badgeItems[0]) profile.gender = badgeItems[0];
+      if (badgeItems[1]) profile.age = badgeItems[1];
+      if (badgeItems[2]) profile.mbti = badgeItems[2];
+    }
+
+    payload.profile = profile;
+    return;
+  }
+
+  if (card.id === "intro") {
+    const introductions =
+      typeof payload.introductions === "object" && payload.introductions !== null
+        ? (payload.introductions as Record<string, unknown>)
+        : {};
+    const textElement = getElementByType(elements, "text");
+    if (textElement && typeof textElement.text === "string") {
+      if (request.introMode === "30") {
+        introductions.pitch_30s = textElement.text;
+      } else {
+        introductions.pitch_1min = textElement.text;
+      }
+    }
+    payload.introductions = introductions;
+    return;
+  }
+
+  if (card.id === "education") {
+    const education =
+      typeof payload.education === "object" && payload.education !== null
+        ? (payload.education as Record<string, unknown>)
+        : {};
+    const groupElement = getElementByType(elements, "grid-education");
+    if (groupElement) {
+      const values = parseGroupItemValues(groupElement);
+      if (values[0]) education.school = values[0];
+      if (values[1]) education.department = values[1];
+      if (values[2]) {
+        const [degree, graduationStatus] = values[2]
+          .split("|")
+          .map((value) => value.trim());
+        education.degree = degree ?? "";
+        if (graduationStatus) {
+          education.graduation_status = graduationStatus;
+        }
+      }
+    }
+    payload.education = education;
+    return;
+  }
+
+  if (card.id === "experience") {
+    const experience =
+      typeof payload.experience === "object" && payload.experience !== null
+        ? (payload.experience as Record<string, unknown>)
+        : {};
+    const groupElement = getElementByType(elements, "grid-groups");
+    if (groupElement) {
+      const values = parseGroupItemValues(groupElement);
+      if (values[0]) experience.intern_title = values[0];
+      if (values[1]) experience.assistant_title = values[1];
+      if (values[2]) experience.military_title = values[2];
+    }
+    payload.experience = experience;
+    return;
+  }
+
+  if (card.id === "stack") {
+    const techStack =
+      typeof payload.tech_stack === "object" && payload.tech_stack !== null
+        ? (payload.tech_stack as Record<string, unknown>)
+        : {};
+    const techElement = getElementByType(elements, "grid-tech");
+    if (techElement && Array.isArray(techElement.items)) {
+      const techItems = techElement.items as Array<Record<string, unknown>>;
+      const keys = ["language", "frontend", "backend", "database", "devops"];
+
+      techItems.forEach((item, index) => {
+        const key = keys[index];
+        if (!key) return;
+        techStack[key] = toStringArray(item.value);
+      });
+    }
+    payload.tech_stack = techStack;
+    return;
+  }
+
+  if (card.id === "projects") {
+    const projects =
+      typeof payload.projects === "object" && payload.projects !== null
+        ? (payload.projects as Record<string, unknown>)
+        : {};
+    const listElement = getElementByType(elements, "icon-list");
+    if (listElement) {
+      projects.items = toStringArray(listElement.items);
+    }
+    payload.projects = projects;
+  }
+};
+
 const getGoogleOAuthConfig = (
   env: Env,
 ): {
@@ -470,6 +682,98 @@ app.get("/api/resume/content.i18n", async (c) => {
       500,
     );
   }
+});
+
+app.post("/api/resume/content.card/update", async (c) => {
+  if (!c.env.JWT_SECRET) {
+    return c.json({ ok: false, message: "JWT_SECRET is not configured" }, 500);
+  }
+
+  const sessionToken = getCookieValue(
+    c.req.header("Cookie"),
+    SESSION_COOKIE_NAME,
+  );
+
+  if (!sessionToken) {
+    return c.json({ ok: false, message: "Not authenticated" }, 401);
+  }
+
+  const verification = await verifyJwt(sessionToken, c.env.JWT_SECRET);
+  if (!verification.valid) {
+    return c.json({ ok: false, message: "Invalid session" }, 401);
+  }
+
+  let body: EditableCardRequest;
+  try {
+    body = await c.req.json<EditableCardRequest>();
+  } catch {
+    return c.json({ ok: false, message: "Invalid JSON body" }, 400);
+  }
+
+  if (!body?.lang || (body.lang !== "en" && body.lang !== "zh_TW")) {
+    return c.json({ ok: false, message: "Invalid lang" }, 400);
+  }
+
+  if (!body.card || typeof body.card.id !== "string") {
+    return c.json({ ok: false, message: "Invalid card payload" }, 400);
+  }
+
+  const row = await c.env.DB.prepare(
+    "SELECT payload FROM resume_i18n_content WHERE lang_code = ? LIMIT 1",
+  )
+    .bind(body.lang)
+    .first<{ payload: string }>();
+
+  if (!row?.payload) {
+    return c.json({ ok: false, message: "Locale not found" }, 404);
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(row.payload) as Record<string, unknown>;
+  } catch {
+    return c.json({ ok: false, message: "Stored payload is invalid JSON" }, 500);
+  }
+
+  try {
+    applyEditableCardUpdate(payload, body);
+  } catch (error) {
+    return c.json(
+      {
+        ok: false,
+        message: "Card mapping failed",
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
+      400,
+    );
+  }
+
+  const updatedPayload = JSON.stringify(payload);
+
+  try {
+    await c.env.DB.prepare(
+      "UPDATE resume_i18n_content SET payload = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE lang_code = ?",
+    )
+      .bind(updatedPayload, body.lang)
+      .run();
+  } catch (error) {
+    return c.json(
+      {
+        ok: false,
+        message: "Failed to update card content",
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
+      500,
+    );
+  }
+
+  return c.json({
+    ok: true,
+    message: `Card ${body.card.id} updated`,
+    lang: body.lang,
+    cardId: body.card.id,
+    content: payload,
+  });
 });
 
 app.get("/api/resume/auth/login", (c) => {
