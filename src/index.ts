@@ -480,14 +480,48 @@ const parseGroupItemValues = (element: Record<string, unknown>): string[] => {
   return values;
 };
 
+const getStoredCardContentKey = (request: EditableCardRequest): string => {
+  if (request.card.id === "intro") {
+    return request.introMode === "30" ? "intro_30" : "intro_60";
+  }
+
+  return request.card.id;
+};
+
+const storeCardContentSnapshot = (
+  payload: Record<string, unknown>,
+  request: EditableCardRequest,
+  elements: Array<Record<string, unknown>>,
+): void => {
+  const cardContent =
+    typeof payload.card_content === "object" && payload.card_content !== null
+      ? (payload.card_content as Record<string, unknown>)
+      : {};
+
+  const key = getStoredCardContentKey(request);
+  const safeElements = JSON.parse(
+    JSON.stringify(elements),
+  ) as Array<Record<string, unknown>>;
+
+  cardContent[key] = {
+    ...(typeof request.card.subtitle === "string"
+      ? { subtitle: request.card.subtitle }
+      : {}),
+    elements: safeElements,
+  };
+
+  payload.card_content = cardContent;
+};
+
 const applyEditableCardUpdate = (
   payload: Record<string, unknown>,
   request: EditableCardRequest,
 ): void => {
   const card = request.card;
-  const elements = Array.isArray(card.elements)
-    ? card.elements
-    : [];
+  const elements = Array.isArray(card.elements) ? card.elements : [];
+
+  // Persist a full snapshot for flexible card structures.
+  storeCardContentSnapshot(payload, request, elements);
 
   if (card.id === "profile") {
     const profile =
