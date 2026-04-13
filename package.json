@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "dev:local": "./scripts/dev-local.sh",
     "start": "wrangler dev",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --noEmit false --outDir /opt/dist/resume-api",
     "deploy": "wrangler deploy",
     "db:seed:generate": "node scripts/generate-d1-seed.mjs"
   },

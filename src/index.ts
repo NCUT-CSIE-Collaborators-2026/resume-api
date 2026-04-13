@@ -4,6 +4,7 @@ import { swaggerUI } from "@hono/swagger-ui";
 
 type Env = {
   DB: D1Database;
+  API_BASE_URI?: string;
   CORS_ORIGINS?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
@@ -29,14 +30,30 @@ type EditableCardRequest = {
 
 const DEFAULT_CORS_ORIGINS =
   "http://localhost:4200,https://haolun-wang.pages.dev";
+const DEFAULT_API_BASE_URI = "/api/resume/v0";
 const DEFAULT_GOOGLE_OAUTH_SCOPES = "openid email profile";
 const OAUTH_STATE_TTL_SECONDS = 600;
 const SESSION_COOKIE_NAME = "resume_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
+const baseUri = DEFAULT_API_BASE_URI;
+
+const normalizeBaseUri = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return DEFAULT_API_BASE_URI;
+  }
+
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.replace(/\/+$/, "") || DEFAULT_API_BASE_URI;
+};
+
+const getBaseUri = (env: Env): string => {
+  return normalizeBaseUri(env.API_BASE_URI ?? DEFAULT_API_BASE_URI);
+};
 
 const app = new Hono<{ Bindings: Env }>();
 
-const openApiDocument = {
+const createOpenApiDocument = (runtimeBaseUri: string) => ({
   openapi: "3.0.3",
   info: {
     title: "Resume API",
@@ -45,7 +62,7 @@ const openApiDocument = {
   },
   servers: [{ url: "/" }],
   paths: {
-    "/api/resume/health": {
+    [`${runtimeBaseUri}/health`]: {
       get: {
         summary: "Health check",
         responses: {
@@ -70,7 +87,7 @@ const openApiDocument = {
         },
       },
     },
-    "/api/resume/content.i18n": {
+    [`${runtimeBaseUri}/content.i18n`]: {
       get: {
         summary: "Get i18n resume content",
         responses: {
@@ -94,7 +111,7 @@ const openApiDocument = {
         },
       },
     },
-    "/api/resume/content.card/update": {
+    [`${runtimeBaseUri}/content.card/update`]: {
       post: {
         summary: "Update one editable resume card",
         requestBody: {
@@ -130,7 +147,7 @@ const openApiDocument = {
         },
       },
     },
-    "/api/resume/auth/google/login": {
+    [`${runtimeBaseUri}/auth/google/login`]: {
       get: {
         summary: "Start Google OAuth login",
         responses: {
@@ -143,7 +160,7 @@ const openApiDocument = {
         },
       },
     },
-    "/api/resume/auth/google/callback": {
+    [`${runtimeBaseUri}/auth/google/callback`]: {
       get: {
         summary: "Handle Google OAuth callback",
         responses: {
@@ -159,7 +176,7 @@ const openApiDocument = {
         },
       },
     },
-    "/api/resume/auth/google/me": {
+    [`${runtimeBaseUri}/auth/google/me`]: {
       get: {
         summary: "Fetch Google profile using access token",
         responses: {
@@ -172,7 +189,7 @@ const openApiDocument = {
         },
       },
     },
-    "/api/resume/auth/google/token-login": {
+    [`${runtimeBaseUri}/auth/google/token-login`]: {
       post: {
         summary: "Login with Google ID token (no OAuth callback)",
         requestBody: {
@@ -209,7 +226,7 @@ const openApiDocument = {
       },
     },
   },
-} as const;
+} as const);
 
 const encodeBase64Url = (bytes: Uint8Array): string => {
   return btoa(String.fromCharCode(...bytes))
@@ -682,20 +699,20 @@ app.use("*", async (c, next) => {
 });
 
 app.get("/", (c) => {
-  return c.redirect("/api/resume/docs", 302);
+  return c.redirect(`${getBaseUri(c.env)}/docs`, 302);
 });
 
-app.get("/api/resume/openapi.json", (c) => {
-  return c.json(openApiDocument);
+app.get(`${baseUri}/openapi.json`, (c) => {
+  return c.json(createOpenApiDocument(getBaseUri(c.env)));
 });
 
-app.get("/api/resume/docs", swaggerUI({ url: "/api/resume/openapi.json" }));
+app.get(`${baseUri}/docs`, swaggerUI({ url: `${baseUri}/openapi.json` }));
 
-app.get("/api/resume/health", (c) => {
+app.get(`${baseUri}/health`, (c) => {
   return c.json({ ok: true, runtime: "cloudflare-workers" });
 });
 
-app.get("/api/resume/content.i18n", async (c) => {
+app.get(`${baseUri}/content.i18n`, async (c) => {
   try {
     const rows = await c.env.DB.prepare(
       "SELECT lang_code, payload FROM resume_i18n_content ORDER BY lang_code",
@@ -727,7 +744,7 @@ app.get("/api/resume/content.i18n", async (c) => {
   }
 });
 
-app.post("/api/resume/content.card/update", async (c) => {
+app.post(`${baseUri}/content.card/update`, async (c) => {
   if (!c.env.JWT_SECRET) {
     return c.json({ ok: false, message: "JWT_SECRET is not configured" }, 500);
   }
@@ -819,11 +836,11 @@ app.post("/api/resume/content.card/update", async (c) => {
   });
 });
 
-app.get("/api/resume/auth/login", (c) => {
-  return c.redirect("/api/resume/auth/google/login", 302);
+app.get(`${baseUri}/auth/login`, (c) => {
+  return c.redirect(`${baseUri}/auth/google/login`, 302);
 });
 
-app.get("/api/resume/auth/google/login", async (c) => {
+app.get(`${baseUri}/auth/google/login`, async (c) => {
   console.log("[OAuth Login] 收到登入請求");
   console.log("[OAuth Login] 環境變數檢查:");
   console.log(
@@ -866,11 +883,12 @@ app.get("/api/resume/auth/google/login", async (c) => {
   }
 
   let postLoginRedirect: string;
+  const runtimeBaseUri = getBaseUri(c.env);
   if (refererOrigin && refererOrigin !== currentOrigin) {
     postLoginRedirect =
-      c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT ?? `${currentOrigin}/api/resume/docs`;
+      c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT ?? `${currentOrigin}${runtimeBaseUri}/docs`;
   } else {
-    postLoginRedirect = `${currentOrigin}/api/resume/docs`;
+    postLoginRedirect = `${currentOrigin}${runtimeBaseUri}/docs`;
   }
 
   const state = await generateSignedState(config.clientSecret, postLoginRedirect);
@@ -903,7 +921,7 @@ app.get("/api/resume/auth/google/login", async (c) => {
   return c.redirect(finalUrl, 302);
 });
 
-app.get("/api/resume/auth/google/callback", async (c) => {
+app.get(`${baseUri}/auth/google/callback`, async (c) => {
   const debugResponseEnabled =
     (c.env.GOOGLE_OAUTH_DEBUG_RESPONSE ?? "").toLowerCase() === "true";
 
@@ -1097,7 +1115,7 @@ app.get("/api/resume/auth/google/callback", async (c) => {
   });
 });
 
-app.get("/api/resume/auth/session", async (c) => {
+app.get(`${baseUri}/auth/session`, async (c) => {
   const jwtSecret = c.env.JWT_SECRET;
   if (!jwtSecret) {
     return c.json(
@@ -1129,7 +1147,7 @@ app.get("/api/resume/auth/session", async (c) => {
   });
 });
 
-app.post("/api/resume/auth/logout", (c) => {
+app.post(`${baseUri}/auth/logout`, (c) => {
   const useSecureCookie = isHttpsRequest(
     c.req.url,
     c.req.header("x-forwarded-proto"),
@@ -1138,7 +1156,7 @@ app.post("/api/resume/auth/logout", (c) => {
   return c.json({ ok: true });
 });
 
-app.get("/api/resume/auth/google/me", async (c) => {
+app.get(`${baseUri}/auth/google/me`, async (c) => {
   const accessToken = c.req.query("access_token");
 
   if (!accessToken) {
@@ -1158,7 +1176,7 @@ app.get("/api/resume/auth/google/me", async (c) => {
   return c.json(profile, profileResponse.status as 200 | 400 | 401 | 500);
 });
 
-app.post("/api/resume/auth/google/token-login", async (c) => {
+app.post(`${baseUri}/auth/google/token-login`, async (c) => {
   if (!c.env.GOOGLE_CLIENT_ID) {
     return c.json({ message: "GOOGLE_CLIENT_ID is not configured" }, 500);
   }
