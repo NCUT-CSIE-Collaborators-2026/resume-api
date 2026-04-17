@@ -5,7 +5,6 @@ import { swaggerUI } from "@hono/swagger-ui";
 type Env = {
   DB: D1Database;
   API_BASE_PATH: string;
-  FRONTEND_BASE_PATH?: string;
   CORS_ORIGINS: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
@@ -60,22 +59,6 @@ const normalizeBaseUri = (value: string): string => {
 
 const getBaseUri = (env: Env): string => {
   return normalizeBaseUri(requireEnv(env.API_BASE_PATH, "API_BASE_PATH"));
-};
-
-const getFrontendBasePath = (env: Env): string => {
-  const configured = env.FRONTEND_BASE_PATH?.trim();
-  if (!configured) {
-    return "/";
-  }
-
-  if (configured === "/") {
-    return "/";
-  }
-
-  const withLeadingSlash = configured.startsWith("/")
-    ? configured
-    : `/${configured}`;
-  return withLeadingSlash.replace(/\/+$/, "") || "/";
 };
 
 const apiApp = new Hono<{ Bindings: Env }>();
@@ -722,27 +705,6 @@ const getAllowedRedirectOrigins = (env: Env): string[] => {
     .filter((origin): origin is string => Boolean(origin));
 };
 
-const sanitizeFrontendRedirectUrl = (rawUrl: string, env: Env): URL => {
-  const url = new URL(rawUrl);
-  const apiBasePath = getBaseUri(env);
-  const legacyApiBasePath = apiBasePath.replace(/\/v\d+$/, "");
-  const frontendBasePath = getFrontendBasePath(env);
-
-  // Prevent redirecting users into backend API/docs routes after OAuth.
-  if (
-    url.pathname === apiBasePath ||
-    url.pathname.startsWith(`${apiBasePath}/`) ||
-    url.pathname === legacyApiBasePath ||
-    url.pathname.startsWith(`${legacyApiBasePath}/`)
-  ) {
-    url.pathname = frontendBasePath;
-    url.search = "";
-    url.hash = "";
-  }
-
-  return url;
-};
-
 apiApp.use("*", async (c, next) => {
   // Fail fast when required runtime bindings are missing.
   getBaseUri(c.env);
@@ -945,11 +907,19 @@ apiApp.get("/auth/google/login", async (c) => {
     );
   }
 
+  let configuredSuccessUrl: URL;
+  try {
+    configuredSuccessUrl = new URL(configuredSuccessRedirect);
+  } catch {
+    return c.json(
+      {
+        message: "Configured success redirect is not a valid URL",
+      },
+      500,
+    );
+  }
+
   const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
-  const configuredSuccessUrl = sanitizeFrontendRedirectUrl(
-    configuredSuccessRedirect,
-    c.env,
-  );
   if (!allowedOrigins.has(configuredSuccessUrl.origin)) {
     return c.json(
       {
@@ -1003,8 +973,19 @@ apiApp.get("/auth/google/callback", async (c) => {
       return c.json(fallbackBody, fallbackStatus);
     }
 
+    let failureUrl: URL;
+    try {
+      failureUrl = new URL(failureRedirect);
+    } catch {
+      return c.json(
+        {
+          message: "Configured failure redirect is not a valid URL",
+        },
+        500,
+      );
+    }
+
     const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
-    const failureUrl = sanitizeFrontendRedirectUrl(failureRedirect, c.env);
     if (!allowedOrigins.has(failureUrl.origin)) {
       return c.json(
         {
@@ -1208,8 +1189,18 @@ apiApp.get("/auth/google/callback", async (c) => {
 
   const successRedirect = c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
   if (successRedirect) {
+    let redirectUrl: URL;
+    try {
+      redirectUrl = new URL(successRedirect);
+    } catch {
+      return redirectToFailure(
+        "success_redirect_invalid_url",
+        { message: "Configured success redirect is not a valid URL" },
+        500,
+      );
+    }
+
     const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
-    const redirectUrl = sanitizeFrontendRedirectUrl(successRedirect, c.env);
     if (!allowedOrigins.has(redirectUrl.origin)) {
       return redirectToFailure(
         "success_redirect_not_allowed",
