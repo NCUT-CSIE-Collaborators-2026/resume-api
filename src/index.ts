@@ -507,6 +507,43 @@ const parseGroupItemValues = (element: Record<string, unknown>): string[] => {
   return values;
 };
 
+const parseTreeGroups = (
+  element: Record<string, unknown>,
+): Array<{ name: string; icon: string; items: Array<{ value: string; icon: string }> }> => {
+  const groups = Array.isArray(element.groups)
+    ? (element.groups as Array<Record<string, unknown>>)
+    : [];
+
+  return groups
+    .map((group) => {
+      const name = typeof group.name === "string" ? group.name.trim() : "";
+      const icon = typeof group.icon === "string" ? group.icon.trim() : "pi pi-folder-open";
+      const items = Array.isArray(group.items)
+        ? (group.items as Array<Record<string, unknown>>)
+            .map((item) => {
+              const value = typeof item.value === "string" ? item.value.trim() : "";
+              const itemIcon =
+                typeof item.icon === "string" && item.icon.trim().length > 0
+                  ? item.icon.trim()
+                  : "pi pi-check-circle";
+
+              return {
+                value,
+                icon: itemIcon,
+              };
+            })
+            .filter((item) => item.value.length > 0)
+        : [];
+
+      return {
+        name,
+        icon: icon.length > 0 ? icon : "pi pi-folder-open",
+        items,
+      };
+    })
+    .filter((group) => group.name.length > 0 || group.items.length > 0);
+};
+
 const getStoredCardContentKey = (request: EditableCardRequest): string => {
   if (request.card.id === "intro") {
     return request.introMode === "30" ? "intro_30" : "intro_60";
@@ -654,11 +691,45 @@ const applyEditableCardUpdate = (
       typeof payload.projects === "object" && payload.projects !== null
         ? (payload.projects as Record<string, unknown>)
         : {};
+    const treeElement = getElementByType(elements, "grid-tree");
+    if (treeElement) {
+      const groups = parseTreeGroups(treeElement);
+      projects.groups = groups;
+      projects.items = groups.flatMap((group) =>
+        group.items.map((item) => item.value),
+      );
+      payload.projects = projects;
+      return;
+    }
+
     const listElement = getElementByType(elements, "icon-list");
     if (listElement) {
       projects.items = toStringArray(listElement.items);
+      projects.groups = [
+        {
+          name: "Project Achievements",
+          icon: "pi pi-folder-open",
+          items: projects.items.map((value) => ({
+            value,
+            icon: "pi pi-check-circle",
+          })),
+        },
+      ];
     }
     payload.projects = projects;
+    return;
+  }
+
+  if (card.id === "verify") {
+    const verify =
+      typeof payload.verify === "object" && payload.verify !== null
+        ? (payload.verify as Record<string, unknown>)
+        : {};
+    const listElement = getElementByType(elements, "icon-list");
+    if (listElement) {
+      verify.items = toStringArray(listElement.items);
+    }
+    payload.verify = verify;
   }
 };
 
@@ -1244,12 +1315,27 @@ apiApp.get("/auth/session", async (c) => {
     return c.json({ authenticated: false, reason: verification.reason }, 200);
   }
 
+  const email =
+    typeof verification.payload.email === "string"
+      ? verification.payload.email.trim()
+      : "";
+  const rawName =
+    typeof verification.payload.name === "string"
+      ? verification.payload.name.trim()
+      : "";
+  const name = rawName || email;
+  const picture =
+    typeof verification.payload.picture === "string" &&
+    verification.payload.picture.trim().length > 0
+      ? verification.payload.picture.trim()
+      : null;
+
   return c.json({
     authenticated: true,
     user: {
-      email: verification.payload.email,
-      name: verification.payload.name,
-      picture: verification.payload.picture,
+      email,
+      name,
+      picture,
     },
   });
 });
