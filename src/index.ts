@@ -1299,7 +1299,11 @@ apiApp.get("/auth/session", async (c) => {
   const jwtSecret = c.env.JWT_SECRET;
   if (!jwtSecret) {
     return c.json(
-      { authenticated: false, message: "JWT_SECRET is not configured" },
+      {
+        authenticated: false,
+        reason: "jwt_secret_not_configured",
+        message: "JWT_SECRET is not configured",
+      },
       500,
     );
   }
@@ -1309,7 +1313,7 @@ apiApp.get("/auth/session", async (c) => {
     SESSION_COOKIE_NAME,
   );
   if (!sessionToken) {
-    return c.json({ authenticated: false }, 200);
+    return c.json({ authenticated: false, reason: "no_session_cookie" }, 200);
   }
 
   const verification = await verifyJwt(sessionToken, jwtSecret);
