@@ -705,38 +705,18 @@ const getAllowedRedirectOrigins = (env: Env): string[] => {
     .filter((origin): origin is string => Boolean(origin));
 };
 
-const resolvePostLoginRedirect = (
-  env: Env,
-  refererHeader: string | undefined,
-): string | null => {
-  const allowedOrigins = new Set(getAllowedRedirectOrigins(env));
+const sanitizeFrontendRedirectUrl = (rawUrl: string, env: Env): URL => {
+  const url = new URL(rawUrl);
+  const apiBasePath = getBaseUri(env);
 
-  if (refererHeader) {
-    try {
-      const refererUrl = new URL(refererHeader);
-      if (allowedOrigins.has(refererUrl.origin)) {
-        return refererUrl.toString();
-      }
-    } catch {
-      // Ignore malformed referer.
-    }
+  // Prevent redirecting users into backend API/docs routes after OAuth.
+  if (url.pathname === apiBasePath || url.pathname.startsWith(`${apiBasePath}/`)) {
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
   }
 
-  const fallback = env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
-  if (!fallback) {
-    return null;
-  }
-
-  try {
-    const fallbackUrl = new URL(fallback);
-    if (allowedOrigins.has(fallbackUrl.origin)) {
-      return fallbackUrl.toString();
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
+  return url;
 };
 
 apiApp.use("*", async (c, next) => {
@@ -931,19 +911,31 @@ apiApp.get("/auth/google/login", async (c) => {
   console.log("[OAuth Login] redirectUri:", config.redirectUri);
   console.log("[OAuth Login] scopes:", config.scopes);
 
-  const refererHeader = c.req.header("referer") ?? "";
-  const postLoginRedirect = resolvePostLoginRedirect(c.env, refererHeader);
-  if (!postLoginRedirect) {
+  const configuredSuccessRedirect = c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
+  if (!configuredSuccessRedirect) {
     return c.json(
       {
-        message:
-          "Missing valid frontend redirect target. Set GOOGLE_OAUTH_SUCCESS_REDIRECT or send a Referer that matches CORS_ORIGINS.",
+        message: "Missing GOOGLE_OAUTH_SUCCESS_REDIRECT",
       },
       500,
     );
   }
 
-  const state = await generateSignedState(config.clientSecret, postLoginRedirect);
+  const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
+  const configuredSuccessUrl = sanitizeFrontendRedirectUrl(
+    configuredSuccessRedirect,
+    c.env,
+  );
+  if (!allowedOrigins.has(configuredSuccessUrl.origin)) {
+    return c.json(
+      {
+        message: "Configured success redirect target is not allowed by CORS_ORIGINS",
+      },
+      500,
+    );
+  }
+
+  const state = await generateSignedState(config.clientSecret);
   console.log("[OAuth Login] ✓ 產生 state:", state.substring(0, 20) + "...");
 
   const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -977,6 +969,32 @@ apiApp.get("/auth/google/callback", async (c) => {
   const debugResponseEnabled =
     (c.env.GOOGLE_OAUTH_DEBUG_RESPONSE ?? "").toLowerCase() === "true";
 
+  const redirectToFailure = (
+    errorCode: string,
+    fallbackBody: Record<string, unknown>,
+    fallbackStatus: 400 | 401 | 403 | 500,
+  ): Response => {
+    const failureRedirect = c.env.GOOGLE_OAUTH_FAILURE_REDIRECT?.trim();
+    if (!failureRedirect) {
+      return c.json(fallbackBody, fallbackStatus);
+    }
+
+    const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
+    const failureUrl = sanitizeFrontendRedirectUrl(failureRedirect, c.env);
+    if (!allowedOrigins.has(failureUrl.origin)) {
+      return c.json(
+        {
+          message: "Configured failure redirect target is not allowed by CORS_ORIGINS",
+        },
+        500,
+      );
+    }
+
+    failureUrl.searchParams.set("login", "failed");
+    failureUrl.searchParams.set("error", errorCode);
+    return c.redirect(failureUrl.toString(), 302);
+  };
+
   const config = getGoogleOAuthConfig(c.env);
   if (!config) {
     return c.json(
@@ -1002,34 +1020,25 @@ apiApp.get("/auth/google/callback", async (c) => {
   });
 
   if (error) {
-    const failureRedirect = c.env.GOOGLE_OAUTH_FAILURE_REDIRECT?.trim();
-    if (failureRedirect) {
-      const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
-      const failureUrl = new URL(failureRedirect);
-      if (!allowedOrigins.has(failureUrl.origin)) {
-        return c.json(
-          {
-            message: "Configured failure redirect target is not allowed by CORS_ORIGINS",
-          },
-          500,
-        );
-      }
-      return c.redirect(
-        `${failureRedirect}?error=${encodeURIComponent(error)}`,
-        302,
-      );
-    }
-
-    return c.json({ message: "Google OAuth denied", error }, 400);
+    return redirectToFailure(
+      error,
+      { message: "Google OAuth denied", error },
+      400,
+    );
   }
 
   if (!code || !state) {
-    return c.json({ message: "Missing OAuth code or state" }, 400);
+    return redirectToFailure(
+      "missing_oauth_code_or_state",
+      { message: "Missing OAuth code or state" },
+      400,
+    );
   }
 
   const stateValidation = await validateSignedState(state, config.clientSecret);
   if (!stateValidation.ok) {
-    return c.json(
+    return redirectToFailure(
+      stateValidation.reason,
       {
         message: "Invalid OAuth state",
         reason: stateValidation.reason,
@@ -1071,7 +1080,8 @@ apiApp.get("/auth/google/callback", async (c) => {
   });
 
   if (!tokenResponse.ok || !tokenPayload.access_token) {
-    return c.json(
+    return redirectToFailure(
+      tokenPayload.error ?? "oauth_token_exchange_failed",
       {
         message: "Failed to exchange OAuth code",
         error: tokenPayload.error ?? "oauth_token_exchange_failed",
@@ -1100,7 +1110,11 @@ apiApp.get("/auth/google/callback", async (c) => {
   });
 
   if (!email) {
-    return c.json({ message: "Google account email missing" }, 403);
+    return redirectToFailure(
+      "google_account_email_missing",
+      { message: "Google account email missing" },
+      403,
+    );
   }
 
   const emailAllowed = await isAllowedLoginEmail(c.env.DB, email);
@@ -1131,7 +1145,8 @@ apiApp.get("/auth/google/callback", async (c) => {
   }
 
   if (!emailAllowed) {
-    return c.json(
+    return redirectToFailure(
+      "login_denied_unknown_user",
       {
         message: "Login denied: unknown user",
         email,
@@ -1141,7 +1156,11 @@ apiApp.get("/auth/google/callback", async (c) => {
   }
 
   if (!c.env.JWT_SECRET) {
-    return c.json({ message: "JWT_SECRET is not configured" }, 500);
+    return redirectToFailure(
+      "jwt_secret_not_configured",
+      { message: "JWT_SECRET is not configured" },
+      500,
+    );
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -1163,13 +1182,13 @@ apiApp.get("/auth/google/callback", async (c) => {
   );
   c.header("Set-Cookie", buildSessionCookie(sessionToken, useSecureCookie));
 
-  const successRedirect =
-    stateValidation.postLoginRedirect ?? c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT;
+  const successRedirect = c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
   if (successRedirect) {
     const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
-    const redirectUrl = new URL(successRedirect);
+    const redirectUrl = sanitizeFrontendRedirectUrl(successRedirect, c.env);
     if (!allowedOrigins.has(redirectUrl.origin)) {
-      return c.json(
+      return redirectToFailure(
+        "success_redirect_not_allowed",
         {
           message: "Configured redirect target is not allowed by CORS_ORIGINS",
         },
@@ -1180,7 +1199,8 @@ apiApp.get("/auth/google/callback", async (c) => {
     return c.redirect(redirectUrl.toString(), 302);
   }
 
-  return c.json(
+  return redirectToFailure(
+    "missing_oauth_success_redirect_target",
     {
       message: "Missing OAuth success redirect target",
     },
