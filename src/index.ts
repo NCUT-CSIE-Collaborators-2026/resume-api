@@ -5,6 +5,7 @@ import { swaggerUI } from "@hono/swagger-ui";
 type Env = {
   DB: D1Database;
   API_BASE_PATH: string;
+  FRONTEND_BASE_PATH?: string;
   CORS_ORIGINS: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
@@ -59,6 +60,18 @@ const normalizeBaseUri = (value: string): string => {
 
 const getBaseUri = (env: Env): string => {
   return normalizeBaseUri(requireEnv(env.API_BASE_PATH, "API_BASE_PATH"));
+};
+
+const getFrontendBasePath = (env: Env): string => {
+  const configured = env.FRONTEND_BASE_PATH?.trim();
+  if (!configured) {
+    return "/resume";
+  }
+
+  const withLeadingSlash = configured.startsWith("/")
+    ? configured
+    : `/${configured}`;
+  return withLeadingSlash.replace(/\/+$/, "") || "/resume";
 };
 
 const apiApp = new Hono<{ Bindings: Env }>();
@@ -709,6 +722,7 @@ const sanitizeFrontendRedirectUrl = (rawUrl: string, env: Env): URL => {
   const url = new URL(rawUrl);
   const apiBasePath = getBaseUri(env);
   const legacyApiBasePath = apiBasePath.replace(/\/v\d+$/, "");
+  const frontendBasePath = getFrontendBasePath(env);
 
   // Prevent redirecting users into backend API/docs routes after OAuth.
   if (
@@ -717,7 +731,7 @@ const sanitizeFrontendRedirectUrl = (rawUrl: string, env: Env): URL => {
     url.pathname === legacyApiBasePath ||
     url.pathname.startsWith(`${legacyApiBasePath}/`)
   ) {
-    url.pathname = "/";
+    url.pathname = frontendBasePath;
     url.search = "";
     url.hash = "";
   }

@@ -6,16 +6,17 @@ workers_dev = true
 [vars]
 API_DOMAIN = "https://resume-api-haolun-wang.9b117201.workers.dev"
 API_BASE_PATH = "/api/resume/v0"
+FRONTEND_BASE_PATH = "/resume"
 CORS_ORIGINS = "http://10.140.58.27,http://127.0.0.1:8787,https://haolun-wang.pages.dev,https://resume-api-haolun-wang.9b117201.workers.dev"
 GOOGLE_OAUTH_SCOPES = "openid email profile"
 GOOGLE_REDIRECT_URI = "https://resume-api-haolun-wang.9b117201.workers.dev/api/resume/v0/auth/google/callback"
-GOOGLE_OAUTH_SUCCESS_REDIRECT = "http://10.140.58.27"
-GOOGLE_OAUTH_FAILURE_REDIRECT = "http://10.140.58.27"
+GOOGLE_OAUTH_SUCCESS_REDIRECT = "https://haolun-wang.pages.dev/resume"
+GOOGLE_OAUTH_FAILURE_REDIRECT = "https://haolun-wang.pages.dev/resume"
 GOOGLE_OAUTH_DEBUG_RESPONSE = "false"
 
 [env.production.vars]
-GOOGLE_OAUTH_SUCCESS_REDIRECT = "http://10.140.58.27/resume"
-GOOGLE_OAUTH_FAILURE_REDIRECT = "http://10.140.58.27/resume"
+GOOGLE_OAUTH_SUCCESS_REDIRECT = "https://haolun-wang.pages.dev/resume"
+GOOGLE_OAUTH_FAILURE_REDIRECT = "https://haolun-wang.pages.dev/resume"
 
 # 測試環境 npx wrangler dev
 [dev] 
