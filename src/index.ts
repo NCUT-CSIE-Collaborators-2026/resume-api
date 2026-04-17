@@ -70,7 +70,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
     version: "1.0.0",
     description: "Cloudflare Workers + D1 backend API for resume-skeleton",
   },
-  servers: [{ url: "/" }],
+  servers: [{ url: runtimeBaseUri }],
   paths: {
     [`${runtimeBaseUri}/health`]: {
       get: {
@@ -803,7 +803,7 @@ apiApp.get("/openapi.json", (c) => {
   return c.json(createOpenApiDocument(getBaseUri(c.env)));
 });
 
-apiApp.get("/docs", swaggerUI({ url: "/openapi.json" }));
+apiApp.get("/docs", swaggerUI({ url: "openapi.json" }));
 
 apiApp.get("/health", (c) => {
   return c.json({ ok: true, runtime: "cloudflare-workers" });
