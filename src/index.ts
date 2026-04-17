@@ -694,22 +694,24 @@ const applyEditableCardUpdate = (
     const treeElement = getElementByType(elements, "grid-tree");
     if (treeElement) {
       const groups = parseTreeGroups(treeElement);
-      projects.groups = groups;
-      projects.items = groups.flatMap((group) =>
+      const projectItems = groups.flatMap((group) =>
         group.items.map((item) => item.value),
       );
+      projects.groups = groups;
+      projects.items = projectItems;
       payload.projects = projects;
       return;
     }
 
     const listElement = getElementByType(elements, "icon-list");
     if (listElement) {
-      projects.items = toStringArray(listElement.items);
+      const projectItems = toStringArray(listElement.items);
+      projects.items = projectItems;
       projects.groups = [
         {
           name: "Project Achievements",
           icon: "pi pi-folder-open",
-          items: projects.items.map((value) => ({
+          items: projectItems.map((value: string) => ({
             value,
             icon: "pi pi-check-circle",
           })),
