@@ -72,7 +72,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
   },
   servers: [{ url: runtimeBaseUri }],
   paths: {
-    [`${runtimeBaseUri}/health`]: {
+    "/health": {
       get: {
         summary: "Health check",
         responses: {
@@ -97,7 +97,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
         },
       },
     },
-    [`${runtimeBaseUri}/content.i18n`]: {
+    "/content.i18n": {
       get: {
         summary: "Get i18n resume content",
         responses: {
@@ -121,7 +121,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
         },
       },
     },
-    [`${runtimeBaseUri}/content.card/update`]: {
+    "/content.card/update": {
       post: {
         summary: "Update one editable resume card",
         requestBody: {
@@ -157,7 +157,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
         },
       },
     },
-    [`${runtimeBaseUri}/auth/google/login`]: {
+    "/auth/google/login": {
       get: {
         summary: "Start Google OAuth login",
         responses: {
@@ -170,7 +170,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
         },
       },
     },
-    [`${runtimeBaseUri}/auth/google/callback`]: {
+    "/auth/google/callback": {
       get: {
         summary: "Handle Google OAuth callback",
         responses: {
@@ -186,7 +186,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
         },
       },
     },
-    [`${runtimeBaseUri}/auth/google/me`]: {
+    "/auth/google/me": {
       get: {
         summary: "Fetch Google profile using access token",
         responses: {
@@ -199,7 +199,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
         },
       },
     },
-    [`${runtimeBaseUri}/auth/google/token-login`]: {
+    "/auth/google/token-login": {
       post: {
         summary: "Login with Google ID token (no OAuth callback)",
         requestBody: {
