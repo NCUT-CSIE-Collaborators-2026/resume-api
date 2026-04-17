@@ -65,13 +65,17 @@ const getBaseUri = (env: Env): string => {
 const getFrontendBasePath = (env: Env): string => {
   const configured = env.FRONTEND_BASE_PATH?.trim();
   if (!configured) {
-    return "/resume";
+    return "/";
+  }
+
+  if (configured === "/") {
+    return "/";
   }
 
   const withLeadingSlash = configured.startsWith("/")
     ? configured
     : `/${configured}`;
-  return withLeadingSlash.replace(/\/+$/, "") || "/resume";
+  return withLeadingSlash.replace(/\/+$/, "") || "/";
 };
 
 const apiApp = new Hono<{ Bindings: Env }>();
