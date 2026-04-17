@@ -1363,6 +1363,7 @@ apiApp.post("/auth/google/token-login", async (c) => {
 export default {
   async fetch(request: Request, env: Env, executionCtx: ExecutionContext) {
     const baseUri = getBaseUri(env);
+    const legacyBaseUri = baseUri.replace(/\/v\d+$/, "");
     const url = new URL(request.url);
     const pathname = url.pathname;
 
@@ -1370,11 +1371,17 @@ export default {
       return Response.redirect(`${url.origin}${baseUri}/docs`, 302);
     }
 
-    if (pathname !== baseUri && !pathname.startsWith(`${baseUri}/`)) {
+    const isPrimaryApiPath = pathname === baseUri || pathname.startsWith(`${baseUri}/`);
+    const isLegacyGoogleCallbackPath =
+      pathname === `${legacyBaseUri}/auth/google/callback`;
+
+    if (!isPrimaryApiPath && !isLegacyGoogleCallbackPath) {
       return new Response("Not Found", { status: 404 });
     }
 
-    const relativePath = pathname.slice(baseUri.length) || "/";
+    const relativePath = isPrimaryApiPath
+      ? pathname.slice(baseUri.length) || "/"
+      : "/auth/google/callback";
     const rewrittenUrl = new URL(request.url);
     rewrittenUrl.pathname = relativePath;
     const rewrittenRequest = new Request(rewrittenUrl.toString(), request);
