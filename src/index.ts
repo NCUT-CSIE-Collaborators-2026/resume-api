@@ -708,9 +708,15 @@ const getAllowedRedirectOrigins = (env: Env): string[] => {
 const sanitizeFrontendRedirectUrl = (rawUrl: string, env: Env): URL => {
   const url = new URL(rawUrl);
   const apiBasePath = getBaseUri(env);
+  const legacyApiBasePath = apiBasePath.replace(/\/v\d+$/, "");
 
   // Prevent redirecting users into backend API/docs routes after OAuth.
-  if (url.pathname === apiBasePath || url.pathname.startsWith(`${apiBasePath}/`)) {
+  if (
+    url.pathname === apiBasePath ||
+    url.pathname.startsWith(`${apiBasePath}/`) ||
+    url.pathname === legacyApiBasePath ||
+    url.pathname.startsWith(`${legacyApiBasePath}/`)
+  ) {
     url.pathname = "/";
     url.search = "";
     url.hash = "";
