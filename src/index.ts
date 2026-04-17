@@ -1201,7 +1201,6 @@ apiApp.get("/auth/google/callback", async (c) => {
         500,
       );
     }
-    redirectUrl.searchParams.set("login", "ok");
     return c.redirect(redirectUrl.toString(), 302);
   }
 

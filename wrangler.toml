@@ -14,8 +14,8 @@ GOOGLE_OAUTH_FAILURE_REDIRECT = "http://10.140.58.27"
 GOOGLE_OAUTH_DEBUG_RESPONSE = "false"
 
 [env.production.vars]
-GOOGLE_OAUTH_SUCCESS_REDIRECT = "https://haolun-wang.pages.dev"
-GOOGLE_OAUTH_FAILURE_REDIRECT = "https://haolun-wang.pages.dev"
+GOOGLE_OAUTH_SUCCESS_REDIRECT = "http://10.140.58.27/resume"
+GOOGLE_OAUTH_FAILURE_REDIRECT = "http://10.140.58.27/resume"
 
 # 測試環境 npx wrangler dev
 [dev] 
