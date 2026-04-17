@@ -4,8 +4,8 @@ import { swaggerUI } from "@hono/swagger-ui";
 
 type Env = {
   DB: D1Database;
-  API_BASE_URI?: string;
-  CORS_ORIGINS?: string;
+  API_BASE_PATH: string;
+  CORS_ORIGINS: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_REDIRECT_URI?: string;
@@ -28,30 +28,40 @@ type EditableCardRequest = {
   };
 };
 
-const DEFAULT_CORS_ORIGINS =
-  "http://localhost:4200,https://haolun-wang.pages.dev";
-const DEFAULT_API_BASE_URI = "/api/resume/v0";
 const DEFAULT_GOOGLE_OAUTH_SCOPES = "openid email profile";
 const OAUTH_STATE_TTL_SECONDS = 600;
 const SESSION_COOKIE_NAME = "resume_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
-const baseUri = DEFAULT_API_BASE_URI;
+
+const requireEnv = (value: string | undefined, name: string): string => {
+  const normalized = value?.trim();
+  if (!normalized) {
+    throw new Error(`[CONFIG] Missing required env: ${name}`);
+  }
+
+  return normalized;
+};
 
 const normalizeBaseUri = (value: string): string => {
   const trimmed = value.trim();
   if (!trimmed) {
-    return DEFAULT_API_BASE_URI;
+    throw new Error("[CONFIG] API_BASE_PATH cannot be empty");
   }
 
   const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withLeadingSlash.replace(/\/+$/, "") || DEFAULT_API_BASE_URI;
+  const normalized = withLeadingSlash.replace(/\/+$/, "");
+  if (!normalized) {
+    throw new Error("[CONFIG] API_BASE_PATH cannot be '/' only");
+  }
+
+  return normalized;
 };
 
 const getBaseUri = (env: Env): string => {
-  return normalizeBaseUri(env.API_BASE_URI ?? DEFAULT_API_BASE_URI);
+  return normalizeBaseUri(requireEnv(env.API_BASE_PATH, "API_BASE_PATH"));
 };
 
-const app = new Hono<{ Bindings: Env }>();
+const apiApp = new Hono<{ Bindings: Env }>();
 
 const createOpenApiDocument = (runtimeBaseUri: string) => ({
   openapi: "3.0.3",
@@ -677,13 +687,61 @@ const getGoogleOAuthConfig = (
 };
 
 const getCorsOrigins = (env: Env): string[] => {
-  return (env.CORS_ORIGINS ?? DEFAULT_CORS_ORIGINS)
+  return requireEnv(env.CORS_ORIGINS, "CORS_ORIGINS")
     .split(",")
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
+    .map((origin: string) => origin.trim())
+    .filter((origin: string) => origin.length > 0);
 };
 
-app.use("*", async (c, next) => {
+const getAllowedRedirectOrigins = (env: Env): string[] => {
+  return getCorsOrigins(env)
+    .map((origin) => {
+      try {
+        return new URL(origin).origin;
+      } catch {
+        return null;
+      }
+    })
+    .filter((origin): origin is string => Boolean(origin));
+};
+
+const resolvePostLoginRedirect = (
+  env: Env,
+  refererHeader: string | undefined,
+): string | null => {
+  const allowedOrigins = new Set(getAllowedRedirectOrigins(env));
+
+  if (refererHeader) {
+    try {
+      const refererUrl = new URL(refererHeader);
+      if (allowedOrigins.has(refererUrl.origin)) {
+        return refererUrl.toString();
+      }
+    } catch {
+      // Ignore malformed referer.
+    }
+  }
+
+  const fallback = env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
+  if (!fallback) {
+    return null;
+  }
+
+  try {
+    const fallbackUrl = new URL(fallback);
+    if (allowedOrigins.has(fallbackUrl.origin)) {
+      return fallbackUrl.toString();
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+
+apiApp.use("*", async (c, next) => {
+  // Fail fast when required runtime bindings are missing.
+  getBaseUri(c.env);
   const corsOrigins = getCorsOrigins(c.env);
   const corsOriginOption =
     corsOrigins.length === 1 ? corsOrigins[0] : corsOrigins;
@@ -698,21 +756,21 @@ app.use("*", async (c, next) => {
   return corsMiddleware(c, next);
 });
 
-app.get("/", (c) => {
-  return c.redirect(`${getBaseUri(c.env)}/docs`, 302);
+apiApp.get("/", (c) => {
+  return c.redirect("/docs", 302);
 });
 
-app.get(`${baseUri}/openapi.json`, (c) => {
+apiApp.get("/openapi.json", (c) => {
   return c.json(createOpenApiDocument(getBaseUri(c.env)));
 });
 
-app.get(`${baseUri}/docs`, swaggerUI({ url: `${baseUri}/openapi.json` }));
+apiApp.get("/docs", swaggerUI({ url: "/openapi.json" }));
 
-app.get(`${baseUri}/health`, (c) => {
+apiApp.get("/health", (c) => {
   return c.json({ ok: true, runtime: "cloudflare-workers" });
 });
 
-app.get(`${baseUri}/content.i18n`, async (c) => {
+apiApp.get("/content.i18n", async (c) => {
   try {
     const rows = await c.env.DB.prepare(
       "SELECT lang_code, payload FROM resume_i18n_content ORDER BY lang_code",
@@ -744,7 +802,7 @@ app.get(`${baseUri}/content.i18n`, async (c) => {
   }
 });
 
-app.post(`${baseUri}/content.card/update`, async (c) => {
+apiApp.post("/content.card/update", async (c) => {
   if (!c.env.JWT_SECRET) {
     return c.json({ ok: false, message: "JWT_SECRET is not configured" }, 500);
   }
@@ -836,11 +894,11 @@ app.post(`${baseUri}/content.card/update`, async (c) => {
   });
 });
 
-app.get(`${baseUri}/auth/login`, (c) => {
-  return c.redirect(`${baseUri}/auth/google/login`, 302);
+apiApp.get("/auth/login", (c) => {
+  return c.redirect("/auth/google/login", 302);
 });
 
-app.get(`${baseUri}/auth/google/login`, async (c) => {
+apiApp.get("/auth/google/login", async (c) => {
   console.log("[OAuth Login] 收到登入請求");
   console.log("[OAuth Login] 環境變數檢查:");
   console.log(
@@ -873,22 +931,16 @@ app.get(`${baseUri}/auth/google/login`, async (c) => {
   console.log("[OAuth Login] redirectUri:", config.redirectUri);
   console.log("[OAuth Login] scopes:", config.scopes);
 
-  const currentOrigin = new URL(c.req.url).origin;
   const refererHeader = c.req.header("referer") ?? "";
-  let refererOrigin: string | null = null;
-  try {
-    refererOrigin = refererHeader ? new URL(refererHeader).origin : null;
-  } catch {
-    refererOrigin = null;
-  }
-
-  let postLoginRedirect: string;
-  const runtimeBaseUri = getBaseUri(c.env);
-  if (refererOrigin && refererOrigin !== currentOrigin) {
-    postLoginRedirect =
-      c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT ?? `${currentOrigin}${runtimeBaseUri}/docs`;
-  } else {
-    postLoginRedirect = `${currentOrigin}${runtimeBaseUri}/docs`;
+  const postLoginRedirect = resolvePostLoginRedirect(c.env, refererHeader);
+  if (!postLoginRedirect) {
+    return c.json(
+      {
+        message:
+          "Missing valid frontend redirect target. Set GOOGLE_OAUTH_SUCCESS_REDIRECT or send a Referer that matches CORS_ORIGINS.",
+      },
+      500,
+    );
   }
 
   const state = await generateSignedState(config.clientSecret, postLoginRedirect);
@@ -921,7 +973,7 @@ app.get(`${baseUri}/auth/google/login`, async (c) => {
   return c.redirect(finalUrl, 302);
 });
 
-app.get(`${baseUri}/auth/google/callback`, async (c) => {
+apiApp.get("/auth/google/callback", async (c) => {
   const debugResponseEnabled =
     (c.env.GOOGLE_OAUTH_DEBUG_RESPONSE ?? "").toLowerCase() === "true";
 
@@ -950,8 +1002,18 @@ app.get(`${baseUri}/auth/google/callback`, async (c) => {
   });
 
   if (error) {
-    const failureRedirect = c.env.GOOGLE_OAUTH_FAILURE_REDIRECT;
+    const failureRedirect = c.env.GOOGLE_OAUTH_FAILURE_REDIRECT?.trim();
     if (failureRedirect) {
+      const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
+      const failureUrl = new URL(failureRedirect);
+      if (!allowedOrigins.has(failureUrl.origin)) {
+        return c.json(
+          {
+            message: "Configured failure redirect target is not allowed by CORS_ORIGINS",
+          },
+          500,
+        );
+      }
       return c.redirect(
         `${failureRedirect}?error=${encodeURIComponent(error)}`,
         302,
@@ -1104,18 +1166,29 @@ app.get(`${baseUri}/auth/google/callback`, async (c) => {
   const successRedirect =
     stateValidation.postLoginRedirect ?? c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT;
   if (successRedirect) {
+    const allowedOrigins = new Set(getAllowedRedirectOrigins(c.env));
     const redirectUrl = new URL(successRedirect);
+    if (!allowedOrigins.has(redirectUrl.origin)) {
+      return c.json(
+        {
+          message: "Configured redirect target is not allowed by CORS_ORIGINS",
+        },
+        500,
+      );
+    }
     redirectUrl.searchParams.set("login", "ok");
     return c.redirect(redirectUrl.toString(), 302);
   }
 
-  return c.json({
-    authenticated: true,
-    message: "login_ok",
-  });
+  return c.json(
+    {
+      message: "Missing OAuth success redirect target",
+    },
+    500,
+  );
 });
 
-app.get(`${baseUri}/auth/session`, async (c) => {
+apiApp.get("/auth/session", async (c) => {
   const jwtSecret = c.env.JWT_SECRET;
   if (!jwtSecret) {
     return c.json(
@@ -1147,7 +1220,7 @@ app.get(`${baseUri}/auth/session`, async (c) => {
   });
 });
 
-app.post(`${baseUri}/auth/logout`, (c) => {
+apiApp.post("/auth/logout", (c) => {
   const useSecureCookie = isHttpsRequest(
     c.req.url,
     c.req.header("x-forwarded-proto"),
@@ -1156,7 +1229,7 @@ app.post(`${baseUri}/auth/logout`, (c) => {
   return c.json({ ok: true });
 });
 
-app.get(`${baseUri}/auth/google/me`, async (c) => {
+apiApp.get("/auth/google/me", async (c) => {
   const accessToken = c.req.query("access_token");
 
   if (!accessToken) {
@@ -1176,7 +1249,7 @@ app.get(`${baseUri}/auth/google/me`, async (c) => {
   return c.json(profile, profileResponse.status as 200 | 400 | 401 | 500);
 });
 
-app.post(`${baseUri}/auth/google/token-login`, async (c) => {
+apiApp.post("/auth/google/token-login", async (c) => {
   if (!c.env.GOOGLE_CLIENT_ID) {
     return c.json({ message: "GOOGLE_CLIENT_ID is not configured" }, 500);
   }
@@ -1261,4 +1334,25 @@ app.post(`${baseUri}/auth/google/token-login`, async (c) => {
   });
 });
 
-export default app;
+export default {
+  async fetch(request: Request, env: Env, executionCtx: ExecutionContext) {
+    const baseUri = getBaseUri(env);
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+
+    if (pathname === "/") {
+      return Response.redirect(`${url.origin}${baseUri}/docs`, 302);
+    }
+
+    if (pathname !== baseUri && !pathname.startsWith(`${baseUri}/`)) {
+      return new Response("Not Found", { status: 404 });
+    }
+
+    const relativePath = pathname.slice(baseUri.length) || "/";
+    const rewrittenUrl = new URL(request.url);
+    rewrittenUrl.pathname = relativePath;
+    const rewrittenRequest = new Request(rewrittenUrl.toString(), request);
+
+    return apiApp.fetch(rewrittenRequest, env, executionCtx);
+  },
+};

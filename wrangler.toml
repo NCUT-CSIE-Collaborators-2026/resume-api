@@ -4,12 +4,24 @@ compatibility_date = "2026-03-27"
 workers_dev = true
 
 [vars]
-API_BASE_URI = "/api/resume/v0"
+API_DOMAIN = "https://resume-api-haolun-wang.9b117201.workers.dev"
+API_BASE_PATH = "/api/resume/v0"
 CORS_ORIGINS = "http://10.140.58.27,http://127.0.0.1:8787,https://haolun-wang.pages.dev,https://resume-api-haolun-wang.9b117201.workers.dev"
 GOOGLE_OAUTH_SCOPES = "openid email profile"
+GOOGLE_OAUTH_SUCCESS_REDIRECT = "http://10.140.58.27"
+GOOGLE_OAUTH_FAILURE_REDIRECT = "http://10.140.58.27"
 GOOGLE_OAUTH_DEBUG_RESPONSE = "false"
 
+[env.production.vars]
+GOOGLE_OAUTH_SUCCESS_REDIRECT = "https://haolun-wang.pages.dev"
+GOOGLE_OAUTH_FAILURE_REDIRECT = "https://haolun-wang.pages.dev"
 
+# 測試環境 npx wrangler dev
+[dev] 
+port = 8787
+ip = "0.0.0.0"
+
+#
 [[d1_databases]]
 binding = "DB"
 database_name = "resume-api-db"
