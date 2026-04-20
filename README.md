@@ -15,13 +15,18 @@
 
 ```bash
 npm install
+cp .dev.vars.local.example .dev.vars.local
+cp .dev.vars.secret.example .dev.vars.secret
+# 編輯 .dev.vars.local / .dev.vars.secret
 npm run dev
 ```
+
+`npm run dev` / `npm run dev:local` 會在啟動時自動生成 `.dev.vars`，並在程序結束後自動刪除。
 
 如需讓 Docker 內的 Nginx 反向代理連到本地 Worker，請改用：
 
 ```bash
-npx wrangler dev --local --ip 0.0.0.0 --port 8787
+npm run dev:local
 ```
 
 ## 主要設定檔
@@ -49,11 +54,16 @@ resume-api/
 ├─ .gitignore                       # 必備：忽略機密與暫存
 ├─ .env.wrangler.local.example      # 建議版控：機密範本
 ├─ .env.wrangler.local              # 本機機密：不要上傳 Git
-├─ .dev.vars                        # 本機機密：不要上傳 Git
+├─ .dev.vars.local.example          # 建議版控：本機非機密變數範本
+├─ .dev.vars.secret.example         # 建議版控：本機機密變數範本
+├─ .dev.vars.local                  # 本機檔案：不要上傳 Git
+├─ .dev.vars.secret                 # 本機機密：不要上傳 Git
+├─ .dev.vars                        # 執行產物：由 compose 腳本自動生成
 ├─ src/
 │  └─ index.ts                      # 必備：API 入口與路由
 ├─ scripts/
 │  ├─ dev-local.sh                  # 建議：本地開發啟動
+│  ├─ dev-vars-compose.sh           # 建議：合併 .dev.vars.local + .dev.vars.secret
 │  ├─ d1-auth-check.sh              # 建議：憑證檢查
 │  └─ d1-sync-from-remote.sh        # 建議：遠端同步到本地
 ├─ node_modules/                    # 執行產物：npm install 後產生
@@ -64,8 +74,8 @@ resume-api/
 
 說明：
 
-- 可提交到 Git：`src/`、`scripts/`、`package.json`、`wrangler.toml`、`.env.wrangler.local.example`
-- 不可提交到 Git：`.env.wrangler.local`、`.dev.vars`、`.wrangler/`、`.tmp/`、`node_modules/`、`wrangler.log`
+- 可提交到 Git：`src/`、`scripts/`、`package.json`、`wrangler.toml`、`.env.wrangler.local.example`、`.dev.vars.local.example`、`.dev.vars.secret.example`
+- 不可提交到 Git：`.env.wrangler.local`、`.dev.vars.local`、`.dev.vars.secret`、`.dev.vars`、`.wrangler/`、`.tmp/`、`node_modules/`、`wrangler.log`
 - 若你是剛 `git pull` 的新環境，沒有 `.wrangler/`、`.tmp/`、`node_modules/` 都是正常的
 
 ## D1 資料來源
@@ -154,10 +164,44 @@ npm run d1:status:local
 
 ## 部署
 
-### CLI 部署
+### 部署前必做（手動參數清單）
+
+以下參數在部署環境一定要存在，否則會出現登入/編輯 API 失敗。
+
+#### D1 Binding（必填）
+
+- `DB` -> `resume-api-db`
+
+#### Variables（可公開，建議手動確認）
+
+- `API_BASE_PATH`（例：`/api/resume/v0`）
+- `CORS_ORIGINS`（例：前端網域白名單）
+- `GOOGLE_REDIRECT_URI`
+- `GOOGLE_OAUTH_SUCCESS_REDIRECT`
+- `GOOGLE_OAUTH_FAILURE_REDIRECT`
+- `GOOGLE_OAUTH_SCOPES`（預設可用 `openid email profile`）
+- `GOOGLE_OAUTH_DEBUG_RESPONSE`（預設 `false`）
+
+#### Secrets（機密，必須手動新增）
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `JWT_SECRET`
+
+說明：本地開發用的 `.dev.vars.local` / `.dev.vars.secret` 不會自動帶到雲端部署，部署時要在 Cloudflare 專案設定中手動補齊。
+
+### CLI 部署（wrangler deploy）
 
 ```bash
 npm run deploy
+```
+
+若尚未設定 secrets，可用以下指令逐一新增：
+
+```bash
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put JWT_SECRET
 ```
 
 ### Cloudflare Git 直連部署
@@ -174,7 +218,14 @@ npm run deploy
 並在 Cloudflare 專案設定補上：
 
 - D1 binding：`DB` -> `resume-api-db`
-- 變數：`CORS_ORIGINS`（依你的前端網域調整）
+- Variables：`API_BASE_PATH`、`CORS_ORIGINS`、`GOOGLE_REDIRECT_URI`、`GOOGLE_OAUTH_SUCCESS_REDIRECT`、`GOOGLE_OAUTH_FAILURE_REDIRECT`、`GOOGLE_OAUTH_SCOPES`、`GOOGLE_OAUTH_DEBUG_RESPONSE`
+- Secrets：`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`JWT_SECRET`
+
+建議部署後先做健康檢查：
+
+```bash
+curl -i https://<your-worker-domain>/api/resume/v0/health
+```
 
 ## 型別檢查
 

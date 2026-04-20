@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "bash ./scripts/dev-run.sh",
     "dev:local": "./scripts/dev-local.sh",
-    "start": "wrangler dev",
+    "start": "bash ./scripts/dev-run.sh",
     "build": "tsc -p tsconfig.json --noEmit",
     "deploy": "wrangler deploy",
     "d1:auth:check": "bash ./scripts/d1-auth-check.sh",

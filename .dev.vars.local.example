@@ -1,0 +1,5 @@
+API_DOMAIN=http://127.0.0.1:8787
+CORS_ORIGINS=http://127.0.0.1:8787,https://your-pages-domain.pages.dev
+GOOGLE_REDIRECT_URI=https://your-workers-domain.workers.dev/api/resume/v0/auth/google/callback
+GOOGLE_OAUTH_SUCCESS_REDIRECT=http://127.0.0.1:8787/resume
+GOOGLE_OAUTH_FAILURE_REDIRECT=http://127.0.0.1:8787/resume

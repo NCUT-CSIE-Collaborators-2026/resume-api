@@ -2,6 +2,8 @@ node_modules/
 dist/
 .wrangler/
 .dev.vars
+.dev.vars.local
+.dev.vars.secret
 .env.wrangler.local
 wrangler.log
 .tmp/
