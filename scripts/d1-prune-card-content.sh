@@ -248,6 +248,24 @@ const buildFinalPayload = (payload, lang) => {
     return verifyItems;
   })();
 
+  const verifyGroups = verifyListItems.map((value, index) => {
+    const parts = value
+      .split('|')
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+    const name = parts[0] || `Certification ${index + 1}`;
+    const childValues = parts.length > 1 ? parts.slice(1) : [value];
+
+    return {
+      name,
+      icon: 'pi pi-shield',
+      items: childValues.map((itemValue) => ({
+        value: itemValue,
+        icon: 'pi pi-check-circle',
+      })),
+    };
+  });
+
   return {
     card_content: {
       cards: [
@@ -308,7 +326,7 @@ const buildFinalPayload = (payload, lang) => {
           title: asString(verifyCard.title) || asString(verify.title) || seed.verifyTitle,
           elements: pickElements(
             verifyCard.elements,
-            [{ type: 'icon-list', icon: 'pi pi-check-circle', items: verifyListItems }],
+            [{ type: 'grid-tree', groups: verifyGroups, gridLayout: 'single' }],
           ),
         },
       ],

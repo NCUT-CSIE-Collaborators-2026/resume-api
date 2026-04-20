@@ -134,7 +134,7 @@ npm run d1:status:local      # 看本地資料版本
 npm run d1:sync:from-remote  # 先清空本地表，清理 sqlite_sequence 語句後，再以遠端資料覆蓋本地副本
 npm run d1:prune:card-content # 把舊 top-level 欄位清掉，改成 card_content.cards 陣列
 npm run d1:audit:card-content # 稽核 card_content.cards 重要欄位是否完整
-npm run d1:backfill:seed     # 用 .tmp/backfill-seed.json 做「只補缺、不覆蓋」回填
+npm run d1:backfill:seed     # 用 .tmp/backfill-seed.json 回填（結構卡 elements 以 seed 覆蓋）
 ```
 
 ### 卡片資料遷移建議流程

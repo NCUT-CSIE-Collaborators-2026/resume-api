@@ -184,9 +184,53 @@ const mergeElements = (targetElements, seedElements) => {
   return out;
 };
 
+const normalizeVerifyElements = (seedElements) => {
+  const elements = deepClone(seedElements);
+  if (!Array.isArray(elements) || elements.length === 0) {
+    return elements;
+  }
+
+  const first = asObject(elements[0]);
+  if (!first || first.type !== 'icon-list' || !Array.isArray(first.items)) {
+    return elements;
+  }
+
+  const groups = first.items
+    .filter((item) => typeof item === 'string' && item.trim().length > 0)
+    .map((item, index) => {
+      const parts = item
+        .split('|')
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+      const name = parts[0] || `Certification ${index + 1}`;
+      const childValues = parts.length > 1 ? parts.slice(1) : [item.trim()];
+
+      return {
+        name,
+        icon: 'pi pi-shield',
+        items: childValues.map((value) => ({
+          value,
+          icon: 'pi pi-check-circle',
+        })),
+      };
+    });
+
+  return [
+    {
+      type: 'grid-tree',
+      groups,
+      gridLayout: 'single',
+    },
+  ];
+};
+
 const mergeCard = (targetCard, seedCard) => {
   const out = deepClone(targetCard ?? {});
   const replaceElementsCardIds = new Set(['education', 'experience', 'stack', 'projects', 'verify']);
+  const normalizedSeedElements =
+    seedCard.id === 'verify' && Array.isArray(seedCard.elements)
+      ? normalizeVerifyElements(seedCard.elements)
+      : seedCard.elements;
 
   const scalarKeys = ['title', 'subtitle', 'name', 'headline', 'text'];
   for (const key of scalarKeys) {
@@ -203,12 +247,12 @@ const mergeCard = (targetCard, seedCard) => {
     }
   }
 
-  if (replaceElementsCardIds.has(seedCard.id) && Array.isArray(seedCard.elements)) {
-    out.elements = deepClone(seedCard.elements);
-  } else if (!Array.isArray(out.elements) && Array.isArray(seedCard.elements)) {
-    out.elements = deepClone(seedCard.elements);
-  } else if (Array.isArray(out.elements) && Array.isArray(seedCard.elements)) {
-    out.elements = mergeElements(out.elements, seedCard.elements);
+  if (replaceElementsCardIds.has(seedCard.id) && Array.isArray(normalizedSeedElements)) {
+    out.elements = deepClone(normalizedSeedElements);
+  } else if (!Array.isArray(out.elements) && Array.isArray(normalizedSeedElements)) {
+    out.elements = deepClone(normalizedSeedElements);
+  } else if (Array.isArray(out.elements) && Array.isArray(normalizedSeedElements)) {
+    out.elements = mergeElements(out.elements, normalizedSeedElements);
   }
 
   out.id = seedCard.id;

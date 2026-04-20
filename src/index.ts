@@ -666,12 +666,6 @@ const storeCardContentSnapshot = (
     elements: safeElements,
   };
 
-  if (request.card.id === "profile") {
-    if (typeof request.card.title === "string" && request.card.title.trim().length > 0) {
-      nextEntry.headline = request.card.title.trim();
-    }
-  }
-
   if (request.card.id === "intro") {
     const textElement = safeElements.find(
       (element) =>
