@@ -43,6 +43,17 @@ const requireEnv = (value: string | undefined, name: string): string => {
   return normalized;
 };
 
+type StoredCardContentEntry = {
+  id: string;
+  title?: string;
+  subtitle?: string;
+  name?: string;
+  headline?: string;
+  text?: string;
+  topics?: string[];
+  elements?: Array<Record<string, unknown>>;
+};
+
 const normalizeBaseUri = (value: string): string => {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -458,7 +469,7 @@ const isAllowedLoginEmail = async (
 ): Promise<boolean> => {
   const row = await db
     .prepare(
-      "SELECT lang_code FROM resume_i18n_content WHERE lower(json_extract(payload, '$.profile.email')) = lower(?) LIMIT 1",
+      "SELECT lang_code FROM resume_i18n_content WHERE EXISTS (SELECT 1 FROM json_each(json_extract(payload, '$.card_content.cards')) AS card WHERE lower(json_extract(card.value, '$.id')) = 'profile' AND lower(json_extract(card.value, '$.elements[0].items[3]')) = lower(?)) LIMIT 1",
     )
     .bind(email)
     .first<{ lang_code: string }>();
@@ -554,13 +565,78 @@ const getStoredCardContentKey = (request: EditableCardRequest): string => {
   return request.card.id;
 };
 
+const normalizeStoredCardContentEntries = (
+  value: unknown,
+): StoredCardContentEntry[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry): StoredCardContentEntry | null => {
+      if (typeof entry !== "object" || entry === null) {
+        return null;
+      }
+
+      const record = entry as Record<string, unknown>;
+      const id = typeof record.id === "string" ? record.id.trim() : "";
+      if (!id) {
+        return null;
+      }
+
+      const topics = Array.isArray(record.topics)
+        ? record.topics
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0)
+        : [];
+
+      return {
+        id,
+        title:
+          typeof record.title === "string" && record.title.trim().length > 0
+            ? record.title.trim()
+            : undefined,
+        subtitle:
+          typeof record.subtitle === "string" && record.subtitle.trim().length > 0
+            ? record.subtitle.trim()
+            : undefined,
+        topics,
+        elements: Array.isArray(record.elements)
+          ? (JSON.parse(JSON.stringify(record.elements)) as Array<Record<string, unknown>>)
+          : undefined,
+        name:
+          typeof record.name === "string" && record.name.trim().length > 0
+            ? record.name.trim()
+            : undefined,
+        headline:
+          typeof record.headline === "string" && record.headline.trim().length > 0
+            ? record.headline.trim()
+            : undefined,
+        text:
+          typeof record.text === "string" && record.text.trim().length > 0
+            ? record.text.trim()
+            : undefined,
+      } as StoredCardContentEntry;
+    })
+    .filter((entry): entry is StoredCardContentEntry => entry !== null);
+};
+
+const upsertStoredCardContentEntry = (
+  entries: StoredCardContentEntry[],
+  nextEntry: StoredCardContentEntry,
+): StoredCardContentEntry[] => {
+  const filtered = entries.filter((entry) => entry.id !== nextEntry.id);
+  return [...filtered, nextEntry];
+};
+
 const storeCardContentSnapshot = (
   payload: Record<string, unknown>,
   request: EditableCardRequest,
   elements: Array<Record<string, unknown>>,
 ): void => {
   const cardContent =
-    typeof payload.card_content === "object" && payload.card_content !== null
+    typeof payload.card_content === "object" && payload.card_content !== null && !Array.isArray(payload.card_content)
       ? (payload.card_content as Record<string, unknown>)
       : {};
 
@@ -568,16 +644,55 @@ const storeCardContentSnapshot = (
   const safeElements = JSON.parse(
     JSON.stringify(elements),
   ) as Array<Record<string, unknown>>;
+  const existingEntry = normalizeStoredCardContentEntries(cardContent.cards).find(
+    (entry) => entry.id === key,
+  );
 
-  cardContent[key] = {
+  const nextEntry: StoredCardContentEntry = {
+    id: key,
+    ...(typeof existingEntry?.name === "string" ? { name: existingEntry.name } : {}),
+    ...(typeof existingEntry?.headline === "string" ? { headline: existingEntry.headline } : {}),
+    ...(typeof existingEntry?.text === "string" ? { text: existingEntry.text } : {}),
     ...(typeof request.card.title === "string"
       ? { title: request.card.title }
       : {}),
     ...(typeof request.card.subtitle === "string"
       ? { subtitle: request.card.subtitle }
       : {}),
+    topics: [request.card.title, request.card.subtitle]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
     elements: safeElements,
   };
+
+  if (request.card.id === "profile") {
+    if (typeof request.card.title === "string" && request.card.title.trim().length > 0) {
+      nextEntry.headline = request.card.title.trim();
+    }
+  }
+
+  if (request.card.id === "intro") {
+    const textElement = safeElements.find(
+      (element) =>
+        typeof element === "object" &&
+        element !== null &&
+        (element as Record<string, unknown>).type === "text" &&
+        typeof (element as Record<string, unknown>).text === "string",
+    ) as Record<string, unknown> | undefined;
+
+    const introText = typeof textElement?.text === "string" ? textElement.text.trim() : "";
+    if (introText.length > 0) {
+      nextEntry.text = introText;
+    }
+  }
+
+  const nextCards = upsertStoredCardContentEntry(
+    normalizeStoredCardContentEntries(cardContent.cards),
+    nextEntry,
+  );
+
+  cardContent.cards = nextCards;
 
   payload.card_content = cardContent;
 };
@@ -593,150 +708,30 @@ const applyEditableCardUpdate = (
   storeCardContentSnapshot(payload, request, elements);
 
   if (card.id === "profile") {
-    const profile =
-      typeof payload.profile === "object" && payload.profile !== null
-        ? (payload.profile as Record<string, unknown>)
-        : {};
-
-    if (typeof card.subtitle === "string") {
-      profile.status = card.subtitle;
-    }
-
-    const badgesElement = getElementByType(elements, "badges");
-    if (badgesElement) {
-      const badgeItems = toStringArray(badgesElement.items);
-      if (badgeItems[0]) profile.gender = badgeItems[0];
-      if (badgeItems[1]) profile.age = badgeItems[1];
-      if (badgeItems[2]) profile.mbti = badgeItems[2];
-    }
-
-    payload.profile = profile;
     return;
   }
 
   if (card.id === "intro") {
-    const introductions =
-      typeof payload.introductions === "object" && payload.introductions !== null
-        ? (payload.introductions as Record<string, unknown>)
-        : {};
-    const textElement = getElementByType(elements, "text");
-    if (textElement && typeof textElement.text === "string") {
-      if (request.introMode === "30") {
-        introductions.pitch_30s = textElement.text;
-      } else {
-        introductions.pitch_1min = textElement.text;
-      }
-    }
-    payload.introductions = introductions;
     return;
   }
 
   if (card.id === "education") {
-    const education =
-      typeof payload.education === "object" && payload.education !== null
-        ? (payload.education as Record<string, unknown>)
-        : {};
-    const groupElement = getElementByType(elements, "grid-tree");
-    if (groupElement) {
-      const values = parseGroupItemValues(groupElement);
-      if (values[0]) education.school = values[0];
-      if (values[1]) education.department = values[1];
-      if (values[2]) {
-        const [degree, graduationStatus] = values[2]
-          .split("|")
-          .map((value) => value.trim());
-        education.degree = degree ?? "";
-        if (graduationStatus) {
-          education.graduation_status = graduationStatus;
-        }
-      }
-    }
-    payload.education = education;
     return;
   }
 
   if (card.id === "experience") {
-    const experience =
-      typeof payload.experience === "object" && payload.experience !== null
-        ? (payload.experience as Record<string, unknown>)
-        : {};
-    const groupElement = getElementByType(elements, "grid-tree");
-    if (groupElement) {
-      const values = parseGroupItemValues(groupElement);
-      if (values[0]) experience.intern_title = values[0];
-      if (values[1]) experience.assistant_title = values[1];
-      if (values[2]) experience.military_title = values[2];
-    }
-    payload.experience = experience;
     return;
   }
 
   if (card.id === "stack") {
-    const techStack =
-      typeof payload.tech_stack === "object" && payload.tech_stack !== null
-        ? (payload.tech_stack as Record<string, unknown>)
-        : {};
-    const techElement = getElementByType(elements, "grid-tech");
-    if (techElement && Array.isArray(techElement.items)) {
-      const techItems = techElement.items as Array<Record<string, unknown>>;
-      const keys = ["language", "frontend", "backend", "database", "devops"];
-
-      techItems.forEach((item, index) => {
-        const key = keys[index];
-        if (!key) return;
-        techStack[key] = toStringArray(item.value);
-      });
-    }
-    payload.tech_stack = techStack;
     return;
   }
 
   if (card.id === "projects") {
-    const projects =
-      typeof payload.projects === "object" && payload.projects !== null
-        ? (payload.projects as Record<string, unknown>)
-        : {};
-    const treeElement = getElementByType(elements, "grid-tree");
-    if (treeElement) {
-      const groups = parseTreeGroups(treeElement);
-      const projectItems = groups.flatMap((group) =>
-        group.items.map((item) => item.value),
-      );
-      projects.groups = groups;
-      projects.items = projectItems;
-      payload.projects = projects;
-      return;
-    }
-
-    const listElement = getElementByType(elements, "icon-list");
-    if (listElement) {
-      const projectItems = toStringArray(listElement.items);
-      projects.items = projectItems;
-      projects.groups = [
-        {
-          name: "Project Achievements",
-          icon: "pi pi-folder-open",
-          items: projectItems.map((value: string) => ({
-            value,
-            icon: "pi pi-check-circle",
-          })),
-        },
-      ];
-    }
-    payload.projects = projects;
     return;
   }
 
   if (card.id === "verify") {
-    const verify =
-      typeof payload.verify === "object" && payload.verify !== null
-        ? (payload.verify as Record<string, unknown>)
-        : {};
-    const listElement = getElementByType(elements, "icon-list");
-    if (listElement) {
-      verify.items = toStringArray(listElement.items);
-    }
-    payload.verify = verify;
   }
 };
 
@@ -815,6 +810,10 @@ apiApp.get("/health", (c) => {
 });
 
 apiApp.get("/content.i18n", async (c) => {
+  c.header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+  c.header("Pragma", "no-cache");
+  c.header("Expires", "0");
+
   try {
     const rows = await c.env.DB.prepare(
       "SELECT lang_code, payload FROM resume_i18n_content ORDER BY lang_code",

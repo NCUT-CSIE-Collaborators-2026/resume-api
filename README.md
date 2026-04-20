@@ -132,6 +132,20 @@ npm run d1:init:local        # 建立本地表結構
 npm run d1:status:remote     # 看遠端資料版本（lang / updated_at / payload_size）
 npm run d1:status:local      # 看本地資料版本
 npm run d1:sync:from-remote  # 先清空本地表，清理 sqlite_sequence 語句後，再以遠端資料覆蓋本地副本
+npm run d1:prune:card-content # 把舊 top-level 欄位清掉，改成 card_content.cards 陣列
+npm run d1:audit:card-content # 稽核 card_content.cards 重要欄位是否完整
+npm run d1:backfill:seed     # 用 .tmp/backfill-seed.json 做「只補缺、不覆蓋」回填
+```
+
+### 卡片資料遷移建議流程
+
+```bash
+npm run d1:sync:from-remote
+# 確認 .tmp/resume-api-db-remote.sql 已存在且是最新備份
+npm run d1:prune:card-content
+npm run d1:audit:card-content
+# 若要把你提供的 seed 值補回遠端
+npm run d1:backfill:seed
 ```
 
 ### 最短流程（新機器 / 剛 pull）
