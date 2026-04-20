@@ -30,33 +30,19 @@ npx wrangler dev --local --ip 0.0.0.0 --port 8787
 
 - `name`：Worker 名稱
 - `main`：入口檔（`src/index.ts`）
-- `[[d1_databases]]`：D1 綁定（目前為 `DB`）
+- `[[d1_databases]]`：D1 綁定（`DB` -> `resume-api-db`）
 - `[vars]`：非機密環境變數（例如 `CORS_ORIGINS`）
-
-目前 D1 綁定已設定：
-
-- `database_name = "resume-api-db"`
-- `database_id = "41be8a01-6d89-4bb8-8dea-84bc002a1175"`
 
 若未來更換 D1，請同步更新 `database_id`。
 
 ## D1 資料來源
 
-資料檔集中在兄弟專案 `../resume-db`：
+**D1 是唯一的數據源**。所有履歷數據都存在遠端 D1 資料庫，代碼庫只包含 schema。
 
-- `../resume-db/db/schema.sql`
-- `../resume-db/db/seed.sql`
-- `../resume-db/source/content.i18n.json`
+- `db/schema.sql`：D1 表結構（初始化用）
+- 業務數據完全由 D1 管理
 
-若 JSON 有更新，先重新產生 seed：
-
-```bash
-npm run db:seed:generate
-```
-
-注意：`seed.sql` 已調整為 D1 遠端可執行格式（不含 `BEGIN TRANSACTION` / `COMMIT`）。
-
-## D1 建立與灌資料
+## D1 同步流程
 
 ### 建立 D1（只需一次）
 
@@ -64,24 +50,26 @@ npm run db:seed:generate
 npx wrangler d1 create resume-api-db
 ```
 
-### 灌遠端 D1（正式環境）
+### 初始化 D1（首次創建時）
 
 ```bash
-npx wrangler d1 execute resume-api-db --remote --file=../resume-db/db/schema.sql --yes
-npx wrangler d1 execute resume-api-db --remote --file=../resume-db/db/seed.sql --yes
+npx wrangler d1 execute resume-api-db --remote --file=db/schema.sql --yes
+npx wrangler d1 execute resume-api-db --remote --file=db/seed.sql --yes
 ```
 
-### 驗證遠端資料
+### 同步到本地 D1
+
+```bash
+npx wrangler d1 execute resume-api-db --local --file=db/schema.sql
+```
+
+數據會自動從遠端 D1 同步到本地（開發時 `wrangler dev` 會使用本地副本）。
+
+### 驗證資料
 
 ```bash
 npx wrangler d1 execute resume-api-db --remote --command "SELECT lang_code, length(payload) AS payload_size FROM resume_i18n_content ORDER BY lang_code;" --yes
-```
-
-### 本地 D1（開發）
-
-```bash
-npx wrangler d1 execute resume-api-db --local --file=../resume-db/db/schema.sql
-npx wrangler d1 execute resume-api-db --local --file=../resume-db/db/seed.sql
+npx wrangler d1 execute resume-api-db --local --command "SELECT lang_code, length(payload) AS payload_size FROM resume_i18n_content ORDER BY lang_code;"
 ```
 
 ## 部署

@@ -8,8 +8,7 @@
     "dev:local": "./scripts/dev-local.sh",
     "start": "wrangler dev",
     "build": "tsc -p tsconfig.json --noEmit",
-    "deploy": "wrangler deploy",
-    "db:seed:generate": "node scripts/generate-d1-seed.mjs"
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.6.1",
