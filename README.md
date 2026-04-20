@@ -35,7 +35,7 @@ npm run dev:local
 
 - `name`：Worker 名稱
 - `main`：入口檔（`src/index.ts`）
-- `[[d1_databases]]`：D1 綁定（`DB` -> `resume-api-db`）
+- `[[d1_databases]]`：D1 綁定（`DB` -> 由 `database_id` 指向實際 D1）
 - `[vars]`：非機密環境變數（例如 `CORS_ORIGINS`）
 
 若未來更換 D1，請同步更新 `database_id`。
@@ -152,8 +152,10 @@ npm run d1:sync:from-remote
 ### 建立 D1（只需一次）
 
 ```bash
-npx wrangler d1 create resume-api-db
+npx wrangler d1 create <your-d1-name>
 ```
+
+說明：此專案目前綁定的 `database_id = 41be8a01-6d89-4bb8-8dea-84bc002a1175`，在你的 Cloudflare 帳號中對應的資料庫名稱是 `resume-skeleton`。
 
 ### 驗證資料
 
@@ -170,7 +172,7 @@ npm run d1:status:local
 
 #### D1 Binding（必填）
 
-- `DB` -> `resume-api-db`
+- `DB` -> 對應 `database_id = 41be8a01-6d89-4bb8-8dea-84bc002a1175` 的 D1
 
 #### Variables（可公開，建議手動確認）
 
@@ -217,7 +219,7 @@ npx wrangler secret put JWT_SECRET
 
 並在 Cloudflare 專案設定補上：
 
-- D1 binding：`DB` -> `resume-api-db`
+- D1 binding：`DB` -> 對應 `database_id = 41be8a01-6d89-4bb8-8dea-84bc002a1175` 的 D1
 - Variables：`API_BASE_PATH`、`CORS_ORIGINS`、`GOOGLE_REDIRECT_URI`、`GOOGLE_OAUTH_SUCCESS_REDIRECT`、`GOOGLE_OAUTH_FAILURE_REDIRECT`、`GOOGLE_OAUTH_SCOPES`、`GOOGLE_OAUTH_DEBUG_RESPONSE`
 - Secrets：`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`JWT_SECRET`
 
