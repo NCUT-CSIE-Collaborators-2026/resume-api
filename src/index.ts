@@ -23,6 +23,7 @@ type EditableCardRequest = {
   introMode?: "30" | "60";
   card: {
     id: string;
+    title?: string;
     subtitle?: string;
     elements?: Array<Record<string, unknown>>;
   };
@@ -137,6 +138,7 @@ const createOpenApiDocument = (runtimeBaseUri: string) => ({
                     type: "object",
                     properties: {
                       id: { type: "string" },
+                      title: { type: "string" },
                       subtitle: { type: "string" },
                       elements: { type: "array", items: { type: "object" } },
                     },
@@ -568,6 +570,9 @@ const storeCardContentSnapshot = (
   ) as Array<Record<string, unknown>>;
 
   cardContent[key] = {
+    ...(typeof request.card.title === "string"
+      ? { title: request.card.title }
+      : {}),
     ...(typeof request.card.subtitle === "string"
       ? { subtitle: request.card.subtitle }
       : {}),
@@ -631,7 +636,7 @@ const applyEditableCardUpdate = (
       typeof payload.education === "object" && payload.education !== null
         ? (payload.education as Record<string, unknown>)
         : {};
-    const groupElement = getElementByType(elements, "grid-education");
+    const groupElement = getElementByType(elements, "grid-tree");
     if (groupElement) {
       const values = parseGroupItemValues(groupElement);
       if (values[0]) education.school = values[0];
@@ -655,7 +660,7 @@ const applyEditableCardUpdate = (
       typeof payload.experience === "object" && payload.experience !== null
         ? (payload.experience as Record<string, unknown>)
         : {};
-    const groupElement = getElementByType(elements, "grid-groups");
+    const groupElement = getElementByType(elements, "grid-tree");
     if (groupElement) {
       const values = parseGroupItemValues(groupElement);
       if (values[0]) experience.intern_title = values[0];
