@@ -2,8 +2,10 @@ node_modules/
 dist/
 .wrangler/
 .dev.vars
-.env*
+.env.wrangler.local
 wrangler.log
+.tmp/
+data-backup.sql
 
 # 本地 D1 臨時文件
 *.sqlite

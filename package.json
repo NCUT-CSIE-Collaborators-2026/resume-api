@@ -8,7 +8,13 @@
     "dev:local": "./scripts/dev-local.sh",
     "start": "wrangler dev",
     "build": "tsc -p tsconfig.json --noEmit",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "d1:auth:check": "bash ./scripts/d1-auth-check.sh",
+    "d1:init:remote": "npx wrangler d1 execute resume-api-db --remote --command \"CREATE TABLE IF NOT EXISTS resume_i18n_content (lang_code TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))); CREATE INDEX IF NOT EXISTS idx_resume_i18n_content_updated_at ON resume_i18n_content(updated_at);\" --yes",
+    "d1:init:local": "npx wrangler d1 execute resume-api-db --local --command \"CREATE TABLE IF NOT EXISTS resume_i18n_content (lang_code TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now'))); CREATE INDEX IF NOT EXISTS idx_resume_i18n_content_updated_at ON resume_i18n_content(updated_at);\"",
+    "d1:status:remote": "npx wrangler d1 execute resume-api-db --remote --command \"SELECT lang_code, updated_at, length(payload) AS payload_size FROM resume_i18n_content ORDER BY lang_code;\" --yes",
+    "d1:status:local": "npx wrangler d1 execute resume-api-db --local --command \"SELECT lang_code, updated_at, length(payload) AS payload_size FROM resume_i18n_content ORDER BY lang_code;\"",
+    "d1:sync:from-remote": "bash ./scripts/d1-sync-from-remote.sh"
   },
   "dependencies": {
     "@hono/swagger-ui": "^0.6.1",
