@@ -22,6 +22,14 @@ export const generateState = (): string => {
   return encodeBase64Url(bytes);
 };
 
+const decodeBase64UrlToBytes = (input: string): Uint8Array => {
+  const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padding =
+    base64.length % 4 === 0 ? "" : "=".repeat(4 - (base64.length % 4));
+  const binary = atob(base64 + padding);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+};
+
 export const getCookieValue = (
   cookieHeader: string | undefined,
   name: string,
@@ -118,16 +126,17 @@ export const verifyJwt = async (
 
   const keyBuffer = getTextBuffer(secret);
   const messageBuffer = getTextBuffer(message);
-  const signatureBuffer = new Uint8Array(
-    atob(signatureEncoded.replace(/-/g, "+").replace(/_/g, "/"))
-      .split("")
-      .map((c) => c.charCodeAt(0)),
-  ).buffer;
+  let signatureBytes: Uint8Array;
+  try {
+    signatureBytes = decodeBase64UrlToBytes(signatureEncoded);
+  } catch {
+    return { valid: false, reason: "invalid_jwt_signature" };
+  }
 
   const isValid = await crypto.subtle.verify(
     "HMAC",
     await crypto.subtle.importKey("raw", keyBuffer, "HMAC", false, ["verify"]),
-    signatureBuffer,
+    signatureBytes as unknown as BufferSource,
     messageBuffer,
   );
 
