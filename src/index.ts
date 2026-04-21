@@ -471,9 +471,9 @@ const isAllowedLoginEmail = async (
 ): Promise<boolean> => {
   const row = await db
     .prepare(
-      "SELECT lang_code FROM resume_i18n_content WHERE EXISTS (SELECT 1 FROM json_each(json_extract(payload, '$.card_content.cards')) AS card WHERE lower(json_extract(card.value, '$.type')) = 'profile' AND lower(json_extract(card.value, '$.elements[0].items[3]')) = lower(?)) LIMIT 1",
+      "SELECT lang_code FROM resume_i18n_content WHERE EXISTS (SELECT 1 FROM json_each(json_extract(payload, '$.card_content.cards')) AS card LEFT JOIN json_each(json_extract(card.value, '$.elements')) AS element LEFT JOIN json_each(json_extract(element.value, '$.items')) AS item WHERE lower(json_extract(card.value, '$.type')) = 'profile' AND (lower(json_extract(item.value, '$')) = lower(?) OR lower(json_extract(item.value, '$.name')) = lower(?))) OR EXISTS (SELECT 1 FROM json_each(payload) AS node JOIN json_each(json_extract(node.value, '$.items')) AS item WHERE json_extract(node.value, '$.id') = 'profile' AND lower(json_extract(item.value, '$.name')) = lower(?)) LIMIT 1",
     )
-    .bind(email)
+    .bind(email, email, email)
     .first<{ lang_code: string }>();
 
   return Boolean(row?.lang_code);
