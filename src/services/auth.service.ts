@@ -1,0 +1,693 @@
+import type { Context } from "hono";
+import type { Env } from "../app.types";
+import {
+  encodeBase64Url,
+  decodeBase64UrlToText,
+  getTextBuffer,
+  getTextBytes,
+  isHttpsRequest,
+  getGoogleOAuthConfig,
+  configService,
+} from "./config.service";
+
+type AppContext = Context<{ Bindings: Env }>;
+
+const SESSION_COOKIE_NAME = "resume_session";
+const SESSION_TTL_SECONDS = 60 * 60 * 8;
+const OAUTH_STATE_TTL_SECONDS = 600;
+
+export const generateState = (): string => {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return encodeBase64Url(bytes);
+};
+
+export const getCookieValue = (
+  cookieHeader: string | undefined,
+  name: string,
+): string | undefined => {
+  if (!cookieHeader) {
+    return undefined;
+  }
+
+  const entries = cookieHeader.split(/;\s*/);
+  for (const entry of entries) {
+    const [rawKey, value] = entry.split("=");
+    if (rawKey === name) {
+      return value ? decodeURIComponent(value) : undefined;
+    }
+  }
+
+  return undefined;
+};
+
+export const buildSessionCookie = (
+  sessionToken: string,
+  useSecureCookie: boolean,
+): string => {
+  const parts = [
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionToken)}`,
+    `HttpOnly`,
+    `Path=/`,
+    `SameSite=Lax`,
+  ];
+
+  if (useSecureCookie) {
+    parts.push(`Secure`);
+  }
+
+  parts.push(`Max-Age=${SESSION_TTL_SECONDS}`);
+  return parts.join("; ");
+};
+
+export const clearSessionCookie = (useSecureCookie: boolean): string => {
+  const parts = [
+    `${SESSION_COOKIE_NAME}=`,
+    `HttpOnly`,
+    `Path=/`,
+    `SameSite=Lax`,
+    `Max-Age=0`,
+  ];
+
+  if (useSecureCookie) {
+    parts.push(`Secure`);
+  }
+
+  return parts.join("; ");
+};
+
+export const createJwt = async (
+  payload: Record<string, unknown>,
+  secret: string,
+): Promise<string> => {
+  const header = JSON.stringify({ alg: "HS256", typ: "JWT" });
+  const body = JSON.stringify(payload);
+
+  const headerEncoded = encodeBase64Url(getTextBytes(header));
+  const bodyEncoded = encodeBase64Url(getTextBytes(body));
+  const message = `${headerEncoded}.${bodyEncoded}`;
+
+  const keyBuffer = getTextBuffer(secret);
+  const messageBuffer = getTextBuffer(message);
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    await crypto.subtle.importKey("raw", keyBuffer, "HMAC", false, ["sign"]),
+    messageBuffer,
+  );
+
+  const signatureEncoded = encodeBase64Url(new Uint8Array(signature));
+  return `${message}.${signatureEncoded}`;
+};
+
+export const verifyJwt = async (
+  token: string,
+  secret: string,
+): Promise<{
+  valid: boolean;
+  reason?: string;
+  payload?: Record<string, unknown>;
+}> => {
+  const parts = token.split(".");
+
+  if (parts.length !== 3) {
+    return { valid: false, reason: "invalid_jwt_structure" };
+  }
+
+  const [headerEncoded, bodyEncoded, signatureEncoded] = parts;
+  const message = `${headerEncoded}.${bodyEncoded}`;
+
+  const keyBuffer = getTextBuffer(secret);
+  const messageBuffer = getTextBuffer(message);
+  const signatureBuffer = new Uint8Array(
+    atob(signatureEncoded.replace(/-/g, "+").replace(/_/g, "/"))
+      .split("")
+      .map((c) => c.charCodeAt(0)),
+  ).buffer;
+
+  const isValid = await crypto.subtle.verify(
+    "HMAC",
+    await crypto.subtle.importKey("raw", keyBuffer, "HMAC", false, ["verify"]),
+    signatureBuffer,
+    messageBuffer,
+  );
+
+  if (!isValid) {
+    return { valid: false, reason: "invalid_jwt_signature" };
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    const bodyText = decodeBase64UrlToText(bodyEncoded);
+    payload = JSON.parse(bodyText) as Record<string, unknown>;
+  } catch {
+    return { valid: false, reason: "invalid_jwt_payload" };
+  }
+
+  const exp = typeof payload.exp === "number" ? payload.exp : null;
+  if (!Number.isFinite(exp) || Math.floor(Date.now() / 1000) >= exp!) {
+    return { valid: false, reason: "jwt_expired" };
+  }
+
+  return { valid: true, payload };
+};
+
+export const generateSignedState = async (secret: string): Promise<string> => {
+  const state = generateState();
+  const now = Math.floor(Date.now() / 1000);
+  const expirationTimestamp = now + OAUTH_STATE_TTL_SECONDS;
+  const statePayload = `${state}:${expirationTimestamp}`;
+
+  const keyBuffer = getTextBuffer(secret);
+  const payloadBuffer = getTextBuffer(statePayload);
+
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    await crypto.subtle.importKey(
+      "raw",
+      keyBuffer,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    ),
+    payloadBuffer,
+  );
+
+  const signatureHex = Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  return `${statePayload}:${signatureHex}`;
+};
+
+export const validateSignedState = async (
+  signedState: string,
+  secret: string,
+): Promise<{ ok: boolean; reason?: string }> => {
+  const parts = signedState.split(":");
+
+  if (parts.length !== 4) {
+    return { ok: false, reason: "malformed_state" };
+  }
+
+  const [stateBase64, timestampStr, signatureHex] = parts;
+  const expirationTimestamp = Number.parseInt(timestampStr, 10);
+
+  if (!Number.isFinite(expirationTimestamp)) {
+    return { ok: false, reason: "invalid_state_timestamp" };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const ageSeconds = now - expirationTimestamp + OAUTH_STATE_TTL_SECONDS;
+
+  if (ageSeconds < 0 || ageSeconds > OAUTH_STATE_TTL_SECONDS) {
+    return { ok: false, reason: "state_expired" };
+  }
+
+  const statePayload = `${stateBase64}:${timestampStr}`;
+  const keyBuffer = getTextBuffer(secret);
+  const payloadBuffer = getTextBuffer(statePayload);
+
+  const expectedSignature = Array.from(
+    new Uint8Array(
+      await crypto.subtle.sign(
+        "HMAC",
+        await crypto.subtle.importKey(
+          "raw",
+          keyBuffer,
+          { name: "HMAC", hash: "SHA-256" },
+          false,
+          ["sign"],
+        ),
+        payloadBuffer,
+      ),
+    ),
+  )
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  if (expectedSignature !== signatureHex) {
+    return { ok: false, reason: "invalid_state_signature" };
+  }
+
+  return { ok: true };
+};
+
+export const isAllowedLoginEmail = async (
+  db: D1Database,
+  email: string,
+): Promise<boolean> => {
+  const row = await db
+    .prepare(
+      `SELECT lang_code FROM resume_i18n_content 
+    WHERE json_extract(payload, '$.card_content.cards') IS NOT NULL
+      AND EXISTS (SELECT 1 FROM json_each(json_extract(payload, '$.card_content.cards')) AS card WHERE card.value ->> 'email' = ?)
+    OR json_type(payload) = 'array'
+      AND EXISTS (SELECT 1 FROM json_each(payload) AS item WHERE item.value ->> 'id' = 'profile' AND item.value ->> 'email' = ?)
+    OR email = ?
+    LIMIT 1`,
+    )
+    .bind(email, email, email)
+    .first<{ lang_code: string }>();
+
+  return Boolean(row?.lang_code);
+};
+
+export const authService = {
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_SECONDS,
+  OAUTH_STATE_TTL_SECONDS,
+
+  async googleLogin(c: AppContext) {
+    const config = getGoogleOAuthConfig(c.env);
+    if (!config) {
+      return c.json(
+        {
+          message:
+            "Google OAuth config missing. Required: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI",
+        },
+        500,
+      );
+    }
+
+    const configuredSuccessRedirect =
+      c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
+    if (!configuredSuccessRedirect) {
+      return c.json({ message: "Missing GOOGLE_OAUTH_SUCCESS_REDIRECT" }, 500);
+    }
+
+    let configuredSuccessUrl: URL;
+    try {
+      configuredSuccessUrl = new URL(configuredSuccessRedirect);
+    } catch {
+      return c.json(
+        { message: "Configured success redirect is not a valid URL" },
+        500,
+      );
+    }
+
+    const allowedOrigins = new Set(
+      configService.getAllowedRedirectOrigins(c.env),
+    );
+    if (!allowedOrigins.has(configuredSuccessUrl.origin)) {
+      return c.json(
+        {
+          message:
+            "Configured success redirect target is not allowed by CORS_ORIGINS",
+        },
+        500,
+      );
+    }
+
+    const state = await generateSignedState(config.clientSecret);
+    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    authUrl.searchParams.set("client_id", config.clientId);
+    authUrl.searchParams.set("redirect_uri", config.redirectUri);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("scope", config.scopes);
+    authUrl.searchParams.set("state", state);
+    authUrl.searchParams.set("access_type", "offline");
+    authUrl.searchParams.set("prompt", "consent");
+
+    return c.redirect(authUrl.toString(), 302);
+  },
+
+  async googleCallback(c: AppContext) {
+    const debugResponseEnabled =
+      (c.env.GOOGLE_OAUTH_DEBUG_RESPONSE ?? "").toLowerCase() === "true";
+
+    const redirectToFailure = (
+      errorCode: string,
+      fallbackBody: Record<string, unknown>,
+      fallbackStatus: 400 | 401 | 403 | 500,
+    ): Response => {
+      const failureRedirect = c.env.GOOGLE_OAUTH_FAILURE_REDIRECT?.trim();
+      if (!failureRedirect) {
+        return c.json(fallbackBody, fallbackStatus);
+      }
+
+      let failureUrl: URL;
+      try {
+        failureUrl = new URL(failureRedirect);
+      } catch {
+        return c.json(
+          { message: "Configured failure redirect is not a valid URL" },
+          500,
+        );
+      }
+
+      const allowedOrigins = new Set(
+        configService.getAllowedRedirectOrigins(c.env),
+      );
+      if (!allowedOrigins.has(failureUrl.origin)) {
+        return c.json(
+          {
+            message:
+              "Configured failure redirect target is not allowed by CORS_ORIGINS",
+          },
+          500,
+        );
+      }
+
+      failureUrl.searchParams.set("login", "failed");
+      failureUrl.searchParams.set("error", errorCode);
+      return c.redirect(failureUrl.toString(), 302);
+    };
+
+    const config = getGoogleOAuthConfig(c.env);
+    if (!config) {
+      return c.json(
+        {
+          message:
+            "Google OAuth config missing. Required: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI",
+        },
+        500,
+      );
+    }
+
+    const requestUrl = new URL(c.req.url);
+    const code = requestUrl.searchParams.get("code");
+    const state = requestUrl.searchParams.get("state");
+    const error = requestUrl.searchParams.get("error");
+
+    if (error) {
+      return redirectToFailure(
+        error,
+        { message: "Google OAuth denied", error },
+        400,
+      );
+    }
+
+    if (!code || !state) {
+      return redirectToFailure(
+        "missing_oauth_code_or_state",
+        { message: "Missing OAuth code or state" },
+        400,
+      );
+    }
+
+    const stateValidation = await validateSignedState(
+      state,
+      config.clientSecret,
+    );
+    if (!stateValidation.ok) {
+      return redirectToFailure(
+        stateValidation.reason ?? "invalid_state",
+        { message: "Invalid OAuth state", reason: stateValidation.reason },
+        400,
+      );
+    }
+
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        redirect_uri: config.redirectUri,
+        grant_type: "authorization_code",
+      }),
+    });
+
+    const tokenPayload = (await tokenResponse.json()) as {
+      access_token?: string;
+      expires_in?: number;
+      id_token?: string;
+      refresh_token?: string;
+      token_type?: string;
+      error?: string;
+      error_description?: string;
+    };
+
+    if (!tokenResponse.ok || !tokenPayload.access_token) {
+      return redirectToFailure(
+        tokenPayload.error ?? "oauth_token_exchange_failed",
+        {
+          message: "Failed to exchange OAuth code",
+          error: tokenPayload.error ?? "oauth_token_exchange_failed",
+          error_description: tokenPayload.error_description,
+        },
+        500,
+      );
+    }
+
+    const profileResponse = await fetch(
+      "https://www.googleapis.com/oauth2/v3/userinfo",
+      {
+        headers: { Authorization: `Bearer ${tokenPayload.access_token}` },
+      },
+    );
+
+    const profile = (await profileResponse.json()) as Record<string, unknown>;
+    const email = typeof profile.email === "string" ? profile.email.trim() : "";
+
+    if (!email) {
+      return redirectToFailure(
+        "google_account_email_missing",
+        { message: "Google account email missing" },
+        403,
+      );
+    }
+
+    const emailAllowed = await isAllowedLoginEmail(c.env.DB, email);
+
+    if (debugResponseEnabled) {
+      return c.json(
+        {
+          debug: true,
+          oauth: {
+            token_exchange_status: tokenResponse.status,
+            has_access_token: Boolean(tokenPayload.access_token),
+            has_id_token: Boolean(tokenPayload.id_token),
+            token_type: tokenPayload.token_type ?? null,
+            expires_in: tokenPayload.expires_in ?? null,
+          },
+          google_profile: {
+            email,
+            name: typeof profile.name === "string" ? profile.name : null,
+            picture:
+              typeof profile.picture === "string" ? profile.picture : null,
+          },
+          access_check: { email_allowed_in_d1: emailAllowed },
+        },
+        200,
+      );
+    }
+
+    if (!emailAllowed) {
+      return redirectToFailure(
+        "login_denied_unknown_user",
+        { message: "Login denied: unknown user", email },
+        403,
+      );
+    }
+
+    if (!c.env.JWT_SECRET) {
+      return redirectToFailure(
+        "jwt_secret_not_configured",
+        { message: "JWT_SECRET is not configured" },
+        500,
+      );
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const sessionToken = await createJwt(
+      {
+        sub: email,
+        email,
+        name: typeof profile.name === "string" ? profile.name : undefined,
+        picture: typeof profile.picture === "string" ? profile.picture : undefined,
+        iat: now,
+        exp: now + SESSION_TTL_SECONDS,
+      },
+      c.env.JWT_SECRET,
+    );
+
+    const useSecureCookie = isHttpsRequest(
+      c.req.url,
+      c.req.header("x-forwarded-proto"),
+    );
+    c.header("Set-Cookie", buildSessionCookie(sessionToken, useSecureCookie));
+
+    const successRedirect = c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
+    if (successRedirect) {
+      let redirectUrl: URL;
+      try {
+        redirectUrl = new URL(successRedirect);
+      } catch {
+        return redirectToFailure(
+          "success_redirect_invalid_url",
+          { message: "Configured success redirect is not a valid URL" },
+          500,
+        );
+      }
+
+      const allowedOrigins = new Set(
+        configService.getAllowedRedirectOrigins(c.env),
+      );
+      if (!allowedOrigins.has(redirectUrl.origin)) {
+        return redirectToFailure(
+          "success_redirect_not_allowed",
+          {
+            message:
+              "Configured redirect target is not allowed by CORS_ORIGINS",
+          },
+          500,
+        );
+      }
+      return c.redirect(redirectUrl.toString(), 302);
+    }
+
+    return redirectToFailure(
+      "missing_oauth_success_redirect_target",
+      { message: "Missing OAuth success redirect target" },
+      500,
+    );
+  },
+
+  async session(c: AppContext) {
+    const jwtSecret = c.env.JWT_SECRET;
+    if (!jwtSecret) {
+      return c.json(
+        {
+          authenticated: false,
+          reason: "jwt_secret_not_configured",
+          message: "JWT_SECRET is not configured",
+        },
+        500,
+      );
+    }
+
+    const sessionToken = getCookieValue(
+      c.req.header("Cookie"),
+      SESSION_COOKIE_NAME,
+    );
+    if (!sessionToken) {
+      return c.json({ authenticated: false, reason: "no_session_cookie" }, 200);
+    }
+
+    const verification = await verifyJwt(sessionToken, jwtSecret);
+    if (!verification.valid) {
+      return c.json({ authenticated: false, reason: verification.reason }, 200);
+    }
+
+    const email =
+      typeof verification.payload!.email === "string"
+        ? verification.payload!.email.trim()
+        : "";
+    const rawName =
+      typeof verification.payload!.name === "string"
+        ? verification.payload!.name.trim()
+        : "";
+    const name = rawName || email;
+    const picture =
+      typeof verification.payload!.picture === "string" &&
+      verification.payload!.picture.trim().length > 0
+        ? verification.payload!.picture.trim()
+        : null;
+
+    return c.json({ authenticated: true, user: { email, name, picture } });
+  },
+
+  logout(c: AppContext) {
+    const useSecureCookie = isHttpsRequest(
+      c.req.url,
+      c.req.header("x-forwarded-proto"),
+    );
+    c.header("Set-Cookie", clearSessionCookie(useSecureCookie));
+    return c.json({ ok: true });
+  },
+
+  async googleMe(c: AppContext) {
+    const accessToken = c.req.query("access_token");
+    if (!accessToken) {
+      return c.json({ message: "Missing access_token query param" }, 400);
+    }
+
+    const profileResponse = await fetch(
+      "https://www.googleapis.com/oauth2/v3/userinfo",
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
+    );
+
+    const profile = await profileResponse.json();
+    return c.json(profile, profileResponse.status as 200 | 400 | 401 | 500);
+  },
+
+  async tokenLogin(c: AppContext) {
+    if (!c.env.GOOGLE_CLIENT_ID) {
+      return c.json({ message: "GOOGLE_CLIENT_ID is not configured" }, 500);
+    }
+
+    if (!c.env.JWT_SECRET) {
+      return c.json({ message: "JWT_SECRET is not configured" }, 500);
+    }
+
+    let body: { id_token?: string };
+    try {
+      body = await c.req.json<{ id_token?: string }>();
+    } catch {
+      return c.json({ message: "Invalid JSON body" }, 400);
+    }
+
+    const idToken = body.id_token?.trim();
+    if (!idToken) {
+      return c.json({ message: "Missing id_token" }, 400);
+    }
+
+    const googleVerifyResponse = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+    );
+
+    if (!googleVerifyResponse.ok) {
+      return c.json({ message: "Invalid Google id_token" }, 401);
+    }
+
+    const tokenInfo = (await googleVerifyResponse.json()) as {
+      aud?: string;
+      email?: string;
+      email_verified?: string | boolean;
+      name?: string;
+      picture?: string;
+    };
+
+    if (tokenInfo.aud !== c.env.GOOGLE_CLIENT_ID) {
+      return c.json({ message: "id_token audience mismatch" }, 401);
+    }
+
+    const emailVerified =
+      tokenInfo.email_verified === true || tokenInfo.email_verified === "true";
+    const email = tokenInfo.email?.trim() ?? "";
+
+    if (!emailVerified || !email) {
+      return c.json({ message: "Google email is missing or unverified" }, 401);
+    }
+
+    const emailAllowed = await isAllowedLoginEmail(c.env.DB, email);
+    if (!emailAllowed) {
+      return c.json({ message: "Login denied: unknown user", email }, 403);
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const sessionToken = await createJwt(
+      {
+        sub: email,
+        email,
+        name: typeof tokenInfo.name === "string" ? tokenInfo.name : undefined,
+        picture: typeof tokenInfo.picture === "string" ? tokenInfo.picture : undefined,
+        iat: now,
+        exp: now + SESSION_TTL_SECONDS,
+      },
+      c.env.JWT_SECRET,
+    );
+
+    const useSecureCookie = isHttpsRequest(
+      c.req.url,
+      c.req.header("x-forwarded-proto"),
+    );
+    c.header("Set-Cookie", buildSessionCookie(sessionToken, useSecureCookie));
+
+    return c.json({ authenticated: true, message: "login_ok" });
+  },
+};

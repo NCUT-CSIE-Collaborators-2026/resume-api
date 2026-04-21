@@ -2,6 +2,11 @@
 
 本文件是 `resume-api` 唯一操作流程說明，且只使用 Wrangler 指令。
 
+Drizzle 導入說明：
+- 使用 `drizzle-orm/d1` 連接 Cloudflare D1。
+- migration 由 Drizzle 產生，套用由 Wrangler 執行。
+- `wrangler.toml` 的 `migrations_dir` 指向 `drizzle/migrations`。
+
 適用範圍：
 - Cloudflare D1 綁定：`DB`
 - D1 資料庫名稱：`resume-api-db`
@@ -38,9 +43,15 @@ npm run d1:auth:check
 ## 2. 初始化表結構（首次或新環境）
 
 ```bash
+npm run db:migrate:local
+npm run db:migrate:remote
+
+# 舊流程（仍可用）
 npm run d1:init:remote
 npm run d1:init:local
 ```
+
+建議以 `db:migrate:*` 為主，`d1:init:*` 作為相容備援。
 
 ## 3. 查看 local / remote 狀態
 

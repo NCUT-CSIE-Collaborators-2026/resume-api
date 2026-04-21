@@ -24,11 +24,23 @@ npm run dev:local
 
 此文件僅保留 Wrangler 指令流程，已移除自製 Python/暫存 SQL 腳本路徑。
 
+## Drizzle
+
+後端已導入 Drizzle（D1 driver），並採用 Wrangler migration 流程。
+
+- Schema: `src/db/schema.ts`
+- Client: `src/db/client.ts`
+- Drizzle config: `drizzle.config.ts`
+- Migrations: `drizzle/migrations`
+
 ## 可用指令
 
 ```bash
 npm run build
 npm run deploy
+npm run db:generate
+npm run db:migrate:local
+npm run db:migrate:remote
 npm run d1:auth:check
 npm run d1:init:remote
 npm run d1:init:local
