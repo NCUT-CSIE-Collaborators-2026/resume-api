@@ -92,13 +92,24 @@ const getProfileEmailsFromArray = (value: unknown): string[] => {
     return [];
   }
 
-  return value
-    .filter(isRecord)
-    .filter(
-      (entry) => typeof entry.id === "string" && entry.id.trim() === "profile",
-    )
-    .map((entry) => normalizeEmail(entry.email))
-    .filter((email) => email.length > 0);
+  const emails: string[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    if (typeof entry.id !== "string" || entry.id.trim() !== "profile") continue;
+
+    // Profile emails are in items[].name, not entry.email
+    if (Array.isArray(entry.items)) {
+      for (const item of entry.items) {
+        if (isRecord(item) && typeof item.name === "string") {
+          const normalized = normalizeEmail(item.name);
+          if (normalized.length > 0) {
+            emails.push(normalized);
+          }
+        }
+      }
+    }
+  }
+  return emails;
 };
 
 const parseJwtPayload = (encodedBody: string): JwtPayload | null => {
