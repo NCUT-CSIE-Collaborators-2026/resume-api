@@ -58,21 +58,8 @@ export const encodeBase64Url = (bytes: Uint8Array): string => {
     .replace(/=+$/g, "");
 };
 
-export const decodeBase64UrlToText = (input: string): string => {
-  const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padding =
-    base64.length % 4 === 0 ? "" : "=".repeat(4 - (base64.length % 4));
-  const binary = atob(base64 + padding);
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
-};
-
 export const getTextBuffer = (input: string): ArrayBuffer => {
   return new TextEncoder().encode(input).buffer as ArrayBuffer;
-};
-
-export const getTextBytes = (input: string): Uint8Array => {
-  return new TextEncoder().encode(input);
 };
 
 export const isHttpsRequest = (

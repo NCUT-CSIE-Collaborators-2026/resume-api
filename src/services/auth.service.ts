@@ -1,10 +1,9 @@
 import type { Context } from "hono";
 import type { Env } from "../app.types";
+import { SignJWT, jwtVerify, errors as joseErrors } from "jose";
 import {
   encodeBase64Url,
-  decodeBase64UrlToText,
   getTextBuffer,
-  getTextBytes,
   isHttpsRequest,
   getGoogleOAuthConfig,
   configService,
@@ -49,14 +48,6 @@ type GoogleUserProfile = {
   picture?: string;
 };
 
-type GoogleTokenInfo = {
-  aud?: string;
-  email?: string;
-  email_verified?: string | boolean;
-  name?: string;
-  picture?: string;
-};
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
@@ -96,29 +87,11 @@ const getProfileEmailsFromArray = (value: unknown): string[] => {
   return emails;
 };
 
-const parseJwtPayload = (encodedBody: string): JwtPayload | null => {
-  const decodedBody = decodeBase64UrlToText(encodedBody);
-  const parsed = parseJson(decodedBody);
-  if (!isRecord(parsed)) {
-    return null;
-  }
-
-  return parsed as JwtPayload;
-};
-
 // 產生 OAuth state 的隨機 nonce。
 export const generateState = (): string => {
   const bytes = new Uint8Array(24);
   crypto.getRandomValues(bytes);
   return encodeBase64Url(bytes);
-};
-
-const decodeBase64UrlToBytes = (input: string): Uint8Array => {
-  const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padding =
-    base64.length % 4 === 0 ? "" : "=".repeat(4 - (base64.length % 4));
-  const binary = atob(base64 + padding);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 };
 
 // 解析請求 Cookie header 中指定名稱的 cookie。
@@ -183,23 +156,10 @@ export const createJwt = async (
   payload: JwtPayload,
   secret: string,
 ): Promise<string> => {
-  const header = JSON.stringify({ alg: "HS256", typ: "JWT" });
-  const body = JSON.stringify(payload);
-
-  const headerEncoded = encodeBase64Url(getTextBytes(header));
-  const bodyEncoded = encodeBase64Url(getTextBytes(body));
-  const message = `${headerEncoded}.${bodyEncoded}`;
-
-  const keyBuffer = getTextBuffer(secret);
-  const messageBuffer = getTextBuffer(message);
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    await crypto.subtle.importKey("raw", keyBuffer, "HMAC", false, ["sign"]),
-    messageBuffer,
-  );
-
-  const signatureEncoded = encodeBase64Url(new Uint8Array(signature));
-  return `${message}.${signatureEncoded}`;
+  const secretKey = new TextEncoder().encode(secret);
+  return new SignJWT(payload as Record<string, unknown>)
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .sign(secretKey);
 };
 
 // 最小化 JWT 驗證：結構、簽章、過期時間。
@@ -217,40 +177,37 @@ export const verifyJwt = async (
     return { valid: false, reason: "invalid_jwt_structure" };
   }
 
-  const [headerEncoded, bodyEncoded, signatureEncoded] = parts;
-  const message = `${headerEncoded}.${bodyEncoded}`;
-
-  const keyBuffer = getTextBuffer(secret);
-  const messageBuffer = getTextBuffer(message);
-  let signatureBytes: Uint8Array;
   try {
-    signatureBytes = decodeBase64UrlToBytes(signatureEncoded);
-  } catch {
-    return { valid: false, reason: "invalid_jwt_signature" };
-  }
+    const secretKey = new TextEncoder().encode(secret);
+    const { payload } = await jwtVerify(token, secretKey, {
+      algorithms: ["HS256"],
+    });
 
-  const isValid = await crypto.subtle.verify(
-    "HMAC",
-    await crypto.subtle.importKey("raw", keyBuffer, "HMAC", false, ["verify"]),
-    signatureBytes as BufferSource,
-    messageBuffer,
-  );
+    if (!isRecord(payload)) {
+      return { valid: false, reason: "invalid_jwt_payload" };
+    }
 
-  if (!isValid) {
-    return { valid: false, reason: "invalid_jwt_signature" };
-  }
+    const exp = typeof payload.exp === "number" ? payload.exp : null;
+    if (!Number.isFinite(exp)) {
+      return { valid: false, reason: "invalid_jwt_payload" };
+    }
 
-  const payload = parseJwtPayload(bodyEncoded);
-  if (!payload) {
+    return { valid: true, payload: payload as JwtPayload };
+  } catch (error) {
+    if (error instanceof joseErrors.JWTExpired) {
+      return { valid: false, reason: "jwt_expired" };
+    }
+
+    if (
+      error instanceof joseErrors.JWSInvalid ||
+      error instanceof joseErrors.JWTInvalid ||
+      error instanceof joseErrors.JWSSignatureVerificationFailed
+    ) {
+      return { valid: false, reason: "invalid_jwt_signature" };
+    }
+
     return { valid: false, reason: "invalid_jwt_payload" };
   }
-
-  const exp = typeof payload.exp === "number" ? payload.exp : null;
-  if (!Number.isFinite(exp) || Math.floor(Date.now() / 1000) >= exp!) {
-    return { valid: false, reason: "jwt_expired" };
-  }
-
-  return { valid: true, payload };
 };
 
 // 簽署 OAuth state，用於防止 CSRF 與重放。
@@ -728,74 +685,13 @@ export const authService = {
     return c.json(profile, profileResponse.status as 200 | 400 | 401 | 500);
   },
 
-  async tokenLogin(c: AppContext) {
-    // 前端 token 流程的替代登入路徑（不走 OAuth callback redirect）。
-    if (!c.env.GOOGLE_CLIENT_ID) {
-      return c.json({ message: "GOOGLE_CLIENT_ID is not configured" }, 500);
-    }
-
-    if (!c.env.JWT_SECRET) {
-      return c.json({ message: "JWT_SECRET is not configured" }, 500);
-    }
-
-    let body: { id_token?: string };
-    try {
-      body = await c.req.json<{ id_token?: string }>();
-    } catch {
-      return c.json({ message: "Invalid JSON body" }, 400);
-    }
-
-    const idToken = body.id_token?.trim();
-    if (!idToken) {
-      return c.json({ message: "Missing id_token" }, 400);
-    }
-
-    const googleVerifyResponse = await fetch(
-      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
-    );
-
-    if (!googleVerifyResponse.ok) {
-      return c.json({ message: "Invalid Google id_token" }, 401);
-    }
-
-    const tokenInfo = (await googleVerifyResponse.json()) as GoogleTokenInfo;
-
-    if (tokenInfo.aud !== c.env.GOOGLE_CLIENT_ID) {
-      return c.json({ message: "id_token audience mismatch" }, 401);
-    }
-
-    const emailVerified =
-      tokenInfo.email_verified === true || tokenInfo.email_verified === "true";
-    const email = normalizeEmail(tokenInfo.email);
-
-    if (!emailVerified || !email) {
-      return c.json({ message: "Google email is missing or unverified" }, 401);
-    }
-
-    const emailAllowed = await isAllowedLoginEmail(c.env, email);
-    if (!emailAllowed) {
-      return c.json({ message: "Login denied: unknown user", email }, 403);
-    }
-
-    const now = Math.floor(Date.now() / 1000);
-    const sessionToken = await createJwt(
+  tokenLogin(c: AppContext) {
+    return c.json(
       {
-        sub: email,
-        email,
-        name: typeof tokenInfo.name === "string" ? tokenInfo.name : undefined,
-        picture: typeof tokenInfo.picture === "string" ? tokenInfo.picture : undefined,
-        iat: now,
-        exp: now + SESSION_TTL_SECONDS,
+        message:
+          "tokenLogin path is disabled. Use /auth/google/login OAuth callback flow.",
       },
-      c.env.JWT_SECRET,
+      410,
     );
-
-    const useSecureCookie = isHttpsRequest(
-      c.req.url,
-      c.req.header("x-forwarded-proto"),
-    );
-    c.header("Set-Cookie", buildSessionCookie(sessionToken, useSecureCookie));
-
-    return c.json({ authenticated: true, message: "login_ok" });
   },
 };
