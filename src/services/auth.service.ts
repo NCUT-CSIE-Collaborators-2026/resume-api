@@ -545,17 +545,31 @@ export const authService = {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const sessionToken = await createJwt(
-      {
-        sub: email,
-        email,
-        name: profile.name,
-        picture: profile.picture,
-        iat: now,
-        exp: now + SESSION_TTL_SECONDS,
-      },
-      c.env.JWT_SECRET,
-    );
+    let sessionToken: string;
+    try {
+      sessionToken = await createJwt(
+        {
+          sub: email,
+          email,
+          name: profile.name,
+          picture: profile.picture,
+          iat: now,
+          exp: now + SESSION_TTL_SECONDS,
+        },
+        c.env.JWT_SECRET,
+      );
+    } catch (error) {
+      // Token 簽發失敗，返回 JSON 而不重定向
+      return c.json(
+        {
+          login: "failed",
+          error: "token_creation_failed",
+          message: "Failed to create session token",
+          debug: { error: error instanceof Error ? error.message : String(error) },
+        },
+        500,
+      );
+    }
 
     const useSecureCookie = isHttpsRequest(
       c.req.url,
