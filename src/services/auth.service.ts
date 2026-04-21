@@ -566,6 +566,8 @@ export const authService = {
     const profile = (await profileResponse.json()) as GoogleUserProfile;
     const email = normalizeEmail(profile.email);
 
+    console.log(`[googleCallback] profile.email=${profile.email}, normalized=${email}`);
+
     if (!email) {
       return redirectToFailure(
         "google_account_email_missing",
@@ -575,6 +577,7 @@ export const authService = {
     }
 
     const emailAllowed = await isAllowedLoginEmail(c.env, email);
+    console.log(`[googleCallback] emailAllowed=${emailAllowed} for email=${email}`);
 
     if (!emailAllowed) {
       return redirectToFailure(
@@ -605,10 +608,13 @@ export const authService = {
       c.env.JWT_SECRET,
     );
 
+    console.log(`[googleCallback] sessionToken created, length=${sessionToken.length}`);
+
     const useSecureCookie = isHttpsRequest(
       c.req.url,
       c.req.header("x-forwarded-proto"),
     );
+    console.log(`[googleCallback] useSecureCookie=${useSecureCookie}, url=${c.req.url}`);
     c.header("Set-Cookie", buildSessionCookie(sessionToken, useSecureCookie));
 
     const successRedirect = c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
