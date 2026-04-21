@@ -9,6 +9,8 @@ import {
   getGoogleOAuthConfig,
   configService,
 } from "./config.service";
+import { getDb } from "../db/client";
+import { resumeI18nContent } from "../db/schema";
 
 type AppContext = Context<{ Bindings: Env }>;
 
@@ -16,6 +18,100 @@ const SESSION_COOKIE_NAME = "resume_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
 const OAUTH_STATE_TTL_SECONDS = 600;
 
+// Auth 服務導覽：
+// 1) 共用資料解析輔助
+// 2) JWT 與 OAuth state 基礎能力
+// 3) 登入郵件白名單查詢
+// 4) 路由處理器（login/callback/session/logout）
+
+type JwtPayload = {
+  sub?: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+  iat?: number;
+  exp?: number;
+};
+
+type GoogleOAuthTokenPayload = {
+  access_token?: string;
+  expires_in?: number;
+  id_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  error?: string;
+  error_description?: string;
+};
+
+type GoogleUserProfile = {
+  email?: string;
+  name?: string;
+  picture?: string;
+};
+
+type GoogleTokenInfo = {
+  aud?: string;
+  email?: string;
+  email_verified?: string | boolean;
+  name?: string;
+  picture?: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const normalizeEmail = (value: unknown): string =>
+  typeof value === "string" ? value.trim().toLowerCase() : "";
+
+const parseJson = (value: string): unknown | null => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const getLegacyCardEmails = (value: unknown): string[] => {
+  if (!isRecord(value) || !isRecord(value.card_content)) {
+    return [];
+  }
+
+  const cards = value.card_content.cards;
+  if (!Array.isArray(cards)) {
+    return [];
+  }
+
+  return cards
+    .filter(isRecord)
+    .map((card) => normalizeEmail(card.email))
+    .filter((email) => email.length > 0);
+};
+
+const getProfileEmailsFromArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(isRecord)
+    .filter(
+      (entry) => typeof entry.id === "string" && entry.id.trim() === "profile",
+    )
+    .map((entry) => normalizeEmail(entry.email))
+    .filter((email) => email.length > 0);
+};
+
+const parseJwtPayload = (encodedBody: string): JwtPayload | null => {
+  const decodedBody = decodeBase64UrlToText(encodedBody);
+  const parsed = parseJson(decodedBody);
+  if (!isRecord(parsed)) {
+    return null;
+  }
+
+  return parsed as JwtPayload;
+};
+
+// 產生 OAuth state 的隨機 nonce。
 export const generateState = (): string => {
   const bytes = new Uint8Array(24);
   crypto.getRandomValues(bytes);
@@ -30,6 +126,7 @@ const decodeBase64UrlToBytes = (input: string): Uint8Array => {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 };
 
+// 解析請求 Cookie header 中指定名稱的 cookie。
 export const getCookieValue = (
   cookieHeader: string | undefined,
   name: string,
@@ -49,6 +146,7 @@ export const getCookieValue = (
   return undefined;
 };
 
+// 寫入 session cookie；HTTPS 時使用 SameSite=None。
 export const buildSessionCookie = (
   sessionToken: string,
   useSecureCookie: boolean,
@@ -57,7 +155,7 @@ export const buildSessionCookie = (
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionToken)}`,
     `HttpOnly`,
     `Path=/`,
-    `SameSite=Lax`,
+    useSecureCookie ? `SameSite=None` : `SameSite=Lax`,
   ];
 
   if (useSecureCookie) {
@@ -68,12 +166,13 @@ export const buildSessionCookie = (
   return parts.join("; ");
 };
 
+// 清除 session cookie（登出流程）。
 export const clearSessionCookie = (useSecureCookie: boolean): string => {
   const parts = [
     `${SESSION_COOKIE_NAME}=`,
     `HttpOnly`,
     `Path=/`,
-    `SameSite=Lax`,
+    useSecureCookie ? `SameSite=None` : `SameSite=Lax`,
     `Max-Age=0`,
   ];
 
@@ -84,8 +183,9 @@ export const clearSessionCookie = (useSecureCookie: boolean): string => {
   return parts.join("; ");
 };
 
+// 最小化 JWT（HS256）簽發。
 export const createJwt = async (
-  payload: Record<string, unknown>,
+  payload: JwtPayload,
   secret: string,
 ): Promise<string> => {
   const header = JSON.stringify({ alg: "HS256", typ: "JWT" });
@@ -107,13 +207,14 @@ export const createJwt = async (
   return `${message}.${signatureEncoded}`;
 };
 
+// 最小化 JWT 驗證：結構、簽章、過期時間。
 export const verifyJwt = async (
   token: string,
   secret: string,
 ): Promise<{
   valid: boolean;
   reason?: string;
-  payload?: Record<string, unknown>;
+  payload?: JwtPayload;
 }> => {
   const parts = token.split(".");
 
@@ -136,7 +237,7 @@ export const verifyJwt = async (
   const isValid = await crypto.subtle.verify(
     "HMAC",
     await crypto.subtle.importKey("raw", keyBuffer, "HMAC", false, ["verify"]),
-    signatureBytes as unknown as BufferSource,
+    signatureBytes as BufferSource,
     messageBuffer,
   );
 
@@ -144,11 +245,8 @@ export const verifyJwt = async (
     return { valid: false, reason: "invalid_jwt_signature" };
   }
 
-  let payload: Record<string, unknown>;
-  try {
-    const bodyText = decodeBase64UrlToText(bodyEncoded);
-    payload = JSON.parse(bodyText) as Record<string, unknown>;
-  } catch {
+  const payload = parseJwtPayload(bodyEncoded);
+  if (!payload) {
     return { valid: false, reason: "invalid_jwt_payload" };
   }
 
@@ -160,6 +258,7 @@ export const verifyJwt = async (
   return { valid: true, payload };
 };
 
+// 簽署 OAuth state，用於防止 CSRF 與重放。
 export const generateSignedState = async (secret: string): Promise<string> => {
   const state = generateState();
   const now = Math.floor(Date.now() / 1000);
@@ -188,13 +287,14 @@ export const generateSignedState = async (secret: string): Promise<string> => {
   return `${statePayload}:${signatureHex}`;
 };
 
+// 驗證 OAuth state 的簽章與有效時間窗。
 export const validateSignedState = async (
   signedState: string,
   secret: string,
 ): Promise<{ ok: boolean; reason?: string }> => {
   const parts = signedState.split(":");
 
-  if (parts.length !== 4) {
+  if (parts.length !== 3) {
     return { ok: false, reason: "malformed_state" };
   }
 
@@ -241,24 +341,37 @@ export const validateSignedState = async (
   return { ok: true };
 };
 
+// 從 D1 payload 查詢郵件白名單（相容舊版與新版結構）。
 export const isAllowedLoginEmail = async (
-  db: D1Database,
+  env: Env,
   email: string,
 ): Promise<boolean> => {
-  const row = await db
-    .prepare(
-      `SELECT lang_code FROM resume_i18n_content 
-    WHERE json_extract(payload, '$.card_content.cards') IS NOT NULL
-      AND EXISTS (SELECT 1 FROM json_each(json_extract(payload, '$.card_content.cards')) AS card WHERE card.value ->> 'email' = ?)
-    OR json_type(payload) = 'array'
-      AND EXISTS (SELECT 1 FROM json_each(payload) AS item WHERE item.value ->> 'id' = 'profile' AND item.value ->> 'email' = ?)
-    OR email = ?
-    LIMIT 1`,
-    )
-    .bind(email, email, email)
-    .first<{ lang_code: string }>();
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail) {
+    return false;
+  }
 
-  return Boolean(row?.lang_code);
+  const db = getDb(env);
+  const rows = await db
+    .select({ payload: resumeI18nContent.payload })
+    .from(resumeI18nContent);
+
+  for (const row of rows) {
+    const parsed = parseJson(row.payload);
+    if (!parsed) {
+      continue;
+    }
+
+    if (getLegacyCardEmails(parsed).includes(targetEmail)) {
+      return true;
+    }
+
+    if (getProfileEmailsFromArray(parsed).includes(targetEmail)) {
+      return true;
+    }
+  }
+
+  return false;
 };
 
 export const authService = {
@@ -267,6 +380,7 @@ export const authService = {
   OAUTH_STATE_TTL_SECONDS,
 
   async googleLogin(c: AppContext) {
+    // 入口：建立 OAuth 授權 URL，並導向 Google。
     const config = getGoogleOAuthConfig(c.env);
     if (!config) {
       return c.json(
@@ -321,9 +435,7 @@ export const authService = {
   },
 
   async googleCallback(c: AppContext) {
-    const debugResponseEnabled =
-      (c.env.GOOGLE_OAUTH_DEBUG_RESPONSE ?? "").toLowerCase() === "true";
-
+    // 回呼：驗證 state -> 交換 code -> 取得 profile -> 發放 session cookie。
     const redirectToFailure = (
       errorCode: string,
       fallbackBody: Record<string, unknown>,
@@ -418,15 +530,8 @@ export const authService = {
       }),
     });
 
-    const tokenPayload = (await tokenResponse.json()) as {
-      access_token?: string;
-      expires_in?: number;
-      id_token?: string;
-      refresh_token?: string;
-      token_type?: string;
-      error?: string;
-      error_description?: string;
-    };
+    const tokenPayload =
+      (await tokenResponse.json()) as GoogleOAuthTokenPayload;
 
     if (!tokenResponse.ok || !tokenPayload.access_token) {
       return redirectToFailure(
@@ -447,8 +552,8 @@ export const authService = {
       },
     );
 
-    const profile = (await profileResponse.json()) as Record<string, unknown>;
-    const email = typeof profile.email === "string" ? profile.email.trim() : "";
+    const profile = (await profileResponse.json()) as GoogleUserProfile;
+    const email = normalizeEmail(profile.email);
 
     if (!email) {
       return redirectToFailure(
@@ -458,30 +563,7 @@ export const authService = {
       );
     }
 
-    const emailAllowed = await isAllowedLoginEmail(c.env.DB, email);
-
-    if (debugResponseEnabled) {
-      return c.json(
-        {
-          debug: true,
-          oauth: {
-            token_exchange_status: tokenResponse.status,
-            has_access_token: Boolean(tokenPayload.access_token),
-            has_id_token: Boolean(tokenPayload.id_token),
-            token_type: tokenPayload.token_type ?? null,
-            expires_in: tokenPayload.expires_in ?? null,
-          },
-          google_profile: {
-            email,
-            name: typeof profile.name === "string" ? profile.name : null,
-            picture:
-              typeof profile.picture === "string" ? profile.picture : null,
-          },
-          access_check: { email_allowed_in_d1: emailAllowed },
-        },
-        200,
-      );
-    }
+    const emailAllowed = await isAllowedLoginEmail(c.env, email);
 
     if (!emailAllowed) {
       return redirectToFailure(
@@ -504,8 +586,8 @@ export const authService = {
       {
         sub: email,
         email,
-        name: typeof profile.name === "string" ? profile.name : undefined,
-        picture: typeof profile.picture === "string" ? profile.picture : undefined,
+        name: profile.name,
+        picture: profile.picture,
         iat: now,
         exp: now + SESSION_TTL_SECONDS,
       },
@@ -555,6 +637,7 @@ export const authService = {
   },
 
   async session(c: AppContext) {
+    // 前端用來判斷登入/可編輯狀態的 session 探針端點。
     const jwtSecret = c.env.JWT_SECRET;
     if (!jwtSecret) {
       return c.json(
@@ -575,47 +658,26 @@ export const authService = {
       return c.json({ authenticated: false, reason: "no_session_cookie" }, 200);
     }
 
-    let verification: {
-      valid: boolean;
-      reason?: string;
-      payload?: Record<string, unknown>;
-    };
-    try {
-      verification = await verifyJwt(sessionToken, jwtSecret);
-    } catch {
-      return c.json(
-        {
-          authenticated: false,
-          reason: "session_verification_error",
-          message: "Session verification failed unexpectedly",
-        },
-        200,
-      );
-    }
+    const verification = await verifyJwt(sessionToken, jwtSecret);
 
     if (!verification.valid) {
       return c.json({ authenticated: false, reason: verification.reason }, 200);
     }
 
-    const email =
-      typeof verification.payload!.email === "string"
-        ? verification.payload!.email.trim()
-        : "";
-    const rawName =
-      typeof verification.payload!.name === "string"
-        ? verification.payload!.name.trim()
-        : "";
+    const payload = verification.payload ?? {};
+    const email = typeof payload.email === "string" ? payload.email.trim() : "";
+    const rawName = typeof payload.name === "string" ? payload.name.trim() : "";
     const name = rawName || email;
     const picture =
-      typeof verification.payload!.picture === "string" &&
-      verification.payload!.picture.trim().length > 0
-        ? verification.payload!.picture.trim()
+      typeof payload.picture === "string" && payload.picture.trim().length > 0
+        ? payload.picture.trim()
         : null;
 
     return c.json({ authenticated: true, user: { email, name, picture } });
   },
 
   logout(c: AppContext) {
+    // 登出僅處理 cookie：清除 client 端 session token。
     const useSecureCookie = isHttpsRequest(
       c.req.url,
       c.req.header("x-forwarded-proto"),
@@ -642,6 +704,7 @@ export const authService = {
   },
 
   async tokenLogin(c: AppContext) {
+    // 前端 token 流程的替代登入路徑（不走 OAuth callback redirect）。
     if (!c.env.GOOGLE_CLIENT_ID) {
       return c.json({ message: "GOOGLE_CLIENT_ID is not configured" }, 500);
     }
@@ -670,13 +733,7 @@ export const authService = {
       return c.json({ message: "Invalid Google id_token" }, 401);
     }
 
-    const tokenInfo = (await googleVerifyResponse.json()) as {
-      aud?: string;
-      email?: string;
-      email_verified?: string | boolean;
-      name?: string;
-      picture?: string;
-    };
+    const tokenInfo = (await googleVerifyResponse.json()) as GoogleTokenInfo;
 
     if (tokenInfo.aud !== c.env.GOOGLE_CLIENT_ID) {
       return c.json({ message: "id_token audience mismatch" }, 401);
@@ -684,13 +741,13 @@ export const authService = {
 
     const emailVerified =
       tokenInfo.email_verified === true || tokenInfo.email_verified === "true";
-    const email = tokenInfo.email?.trim() ?? "";
+    const email = normalizeEmail(tokenInfo.email);
 
     if (!emailVerified || !email) {
       return c.json({ message: "Google email is missing or unverified" }, 401);
     }
 
-    const emailAllowed = await isAllowedLoginEmail(c.env.DB, email);
+    const emailAllowed = await isAllowedLoginEmail(c.env, email);
     if (!emailAllowed) {
       return c.json({ message: "Login denied: unknown user", email }, 403);
     }
