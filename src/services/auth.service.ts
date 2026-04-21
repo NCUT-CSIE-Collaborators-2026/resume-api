@@ -637,7 +637,24 @@ export const authService = {
           500,
         );
       }
-      return c.redirect(redirectUrl.toString(), 302);
+      redirectUrl.searchParams.set("login", "success");
+      redirectUrl.searchParams.set("debug", JSON.stringify({
+        email,
+        tokenLength: sessionToken.length,
+        secure: useSecureCookie,
+      }));
+      
+      // 先返回 JSON，讓用戶看到 Set-Cookie 被設置了
+      const response = c.json({
+        success: true,
+        email,
+        tokenLength: sessionToken.length,
+        secure: useSecureCookie,
+        redirectUrl: redirectUrl.toString(),
+      }, 200);
+      
+      response.headers.set("Set-Cookie", buildSessionCookie(sessionToken, useSecureCookie));
+      return response;
     }
 
     return redirectToFailure(
