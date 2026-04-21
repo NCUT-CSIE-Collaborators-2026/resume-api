@@ -71,22 +71,6 @@ const parseJson = (value: string): unknown | null => {
   }
 };
 
-const getLegacyCardEmails = (value: unknown): string[] => {
-  if (!isRecord(value) || !isRecord(value.card_content)) {
-    return [];
-  }
-
-  const cards = value.card_content.cards;
-  if (!Array.isArray(cards)) {
-    return [];
-  }
-
-  return cards
-    .filter(isRecord)
-    .map((card) => normalizeEmail(card.email))
-    .filter((email) => email.length > 0);
-};
-
 const getProfileEmailsFromArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -352,7 +336,7 @@ export const validateSignedState = async (
   return { ok: true };
 };
 
-// 從 D1 payload 查詢郵件白名單（相容舊版與新版結構）。
+// 從 D1 payload 查詢郵件白名單（僅支援目前 root array / profile.items[].name 結構）。
 export const isAllowedLoginEmail = async (
   env: Env,
   email: string,
@@ -371,10 +355,6 @@ export const isAllowedLoginEmail = async (
     const parsed = parseJson(row.payload);
     if (!parsed) {
       continue;
-    }
-
-    if (getLegacyCardEmails(parsed).includes(targetEmail)) {
-      return true;
     }
 
     if (getProfileEmailsFromArray(parsed).includes(targetEmail)) {
@@ -447,11 +427,27 @@ export const authService = {
 
   async googleCallback(c: AppContext) {
     // 回呼：驗證 state -> 交換 code -> 取得 profile -> 發放 session cookie。
+    const requestUrl = new URL(c.req.url);
+    const debugMode =
+      requestUrl.searchParams.get("debug") === "1" ||
+      c.env.GOOGLE_OAUTH_DEBUG_RESPONSE?.trim() === "true";
+
     const redirectToFailure = (
       errorCode: string,
       fallbackBody: Record<string, unknown>,
       fallbackStatus: 400 | 401 | 403 | 500,
     ): Response => {
+      if (debugMode) {
+        return c.json(
+          {
+            ...fallbackBody,
+            login: "failed",
+            error: errorCode,
+          },
+          fallbackStatus,
+        );
+      }
+
       const failureRedirect = c.env.GOOGLE_OAUTH_FAILURE_REDIRECT?.trim();
       if (!failureRedirect) {
         return c.json(fallbackBody, fallbackStatus);
@@ -496,7 +492,6 @@ export const authService = {
       );
     }
 
-    const requestUrl = new URL(c.req.url);
     const code = requestUrl.searchParams.get("code");
     const state = requestUrl.searchParams.get("state");
     const error = requestUrl.searchParams.get("error");
@@ -637,24 +632,26 @@ export const authService = {
           500,
         );
       }
+      if (debugMode) {
+        const response = c.json(
+          {
+            login: "success",
+            email,
+            tokenLength: sessionToken.length,
+            secure: useSecureCookie,
+            redirectUrl: redirectUrl.toString(),
+          },
+          200,
+        );
+        response.headers.set(
+          "Set-Cookie",
+          buildSessionCookie(sessionToken, useSecureCookie),
+        );
+        return response;
+      }
+
       redirectUrl.searchParams.set("login", "success");
-      redirectUrl.searchParams.set("debug", JSON.stringify({
-        email,
-        tokenLength: sessionToken.length,
-        secure: useSecureCookie,
-      }));
-      
-      // 先返回 JSON，讓用戶看到 Set-Cookie 被設置了
-      const response = c.json({
-        success: true,
-        email,
-        tokenLength: sessionToken.length,
-        secure: useSecureCookie,
-        redirectUrl: redirectUrl.toString(),
-      }, 200);
-      
-      response.headers.set("Set-Cookie", buildSessionCookie(sessionToken, useSecureCookie));
-      return response;
+      return c.redirect(redirectUrl.toString(), 302);
     }
 
     return redirectToFailure(
