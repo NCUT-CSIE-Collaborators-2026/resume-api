@@ -224,13 +224,83 @@ const normalizeVerifyElements = (seedElements) => {
   ];
 };
 
+const parseTechNode = (rawValue) => {
+  const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+  if (!value) {
+    return null;
+  }
+
+  const parenthesisMatch = value.match(/^(.+?)\s*\((.+)\)$/);
+  if (parenthesisMatch) {
+    return {
+      value: parenthesisMatch[1].trim(),
+      icon: 'pi pi-code',
+      children: [{ value: parenthesisMatch[2].trim(), icon: 'pi pi-sitemap' }],
+    };
+  }
+
+  const versionMatch = value.match(/^(.+?)\s+([0-9][0-9A-Za-z+._-]*)$/);
+  if (versionMatch) {
+    return {
+      value: versionMatch[1].trim(),
+      icon: 'pi pi-code',
+      children: [{ value: versionMatch[2].trim(), icon: 'pi pi-tag' }],
+    };
+  }
+
+  return {
+    value,
+    icon: 'pi pi-code',
+    children: [{ value: 'core', icon: 'pi pi-sitemap' }],
+  };
+};
+
+const normalizeStackElements = (seedElements) => {
+  const elements = deepClone(seedElements);
+  if (!Array.isArray(elements) || elements.length === 0) {
+    return elements;
+  }
+
+  const first = asObject(elements[0]);
+  if (!first || first.type !== 'grid-tech' || !Array.isArray(first.items)) {
+    return elements;
+  }
+
+  const groups = first.items
+    .filter((category) => asObject(category))
+    .map((category) => {
+      const categoryRecord = asObject(category);
+      const label = typeof categoryRecord?.label === 'string' ? categoryRecord.label.trim() : '';
+      const values = asArray(categoryRecord?.value)
+        .map((item) => parseTechNode(item))
+        .filter((item) => item !== null);
+
+      return {
+        name: label,
+        icon: 'pi pi-cog',
+        items: values,
+      };
+    })
+    .filter((group) => group.name.length > 0);
+
+  return [
+    {
+      type: 'grid-tree',
+      groups,
+      gridLayout: 'compact',
+    },
+  ];
+};
+
 const mergeCard = (targetCard, seedCard) => {
   const out = deepClone(targetCard ?? {});
   const replaceElementsCardIds = new Set(['education', 'experience', 'stack', 'projects', 'verify']);
   const normalizedSeedElements =
     seedCard.id === 'verify' && Array.isArray(seedCard.elements)
       ? normalizeVerifyElements(seedCard.elements)
-      : seedCard.elements;
+      : seedCard.id === 'stack' && Array.isArray(seedCard.elements)
+        ? normalizeStackElements(seedCard.elements)
+        : seedCard.elements;
 
   const scalarKeys = ['title', 'subtitle', 'name', 'headline', 'text'];
   for (const key of scalarKeys) {

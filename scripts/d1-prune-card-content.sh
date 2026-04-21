@@ -162,6 +162,78 @@ const normalizeGroups = (groups) =>
     }))
     .filter((group) => group.name.length > 0 || group.items.length > 0);
 
+const parseTechNode = (rawValue) => {
+  const value = asString(rawValue);
+  if (!value) {
+    return null;
+  }
+
+  const parenthesisMatch = value.match(/^(.+?)\s*\((.+)\)$/);
+  if (parenthesisMatch) {
+    return {
+      value: parenthesisMatch[1].trim(),
+      icon: 'pi pi-code',
+      children: [{ value: parenthesisMatch[2].trim(), icon: 'pi pi-sitemap' }],
+    };
+  }
+
+  const versionMatch = value.match(/^(.+?)\s+([0-9][0-9A-Za-z+._-]*)$/);
+  if (versionMatch) {
+    return {
+      value: versionMatch[1].trim(),
+      icon: 'pi pi-code',
+      children: [{ value: versionMatch[2].trim(), icon: 'pi pi-tag' }],
+    };
+  }
+
+  return {
+    value,
+    icon: 'pi pi-code',
+    children: [{ value: 'core', icon: 'pi pi-sitemap' }],
+  };
+};
+
+const toStackGroupsFromGridTech = (elements) => {
+  const list = asArray(elements);
+  const first = list[0];
+  if (!first || first.type !== 'grid-tech' || !Array.isArray(first.items)) {
+    return [];
+  }
+
+  return first.items
+    .filter((category) => category && typeof category === 'object')
+    .map((category) => {
+      const label = asString(category.label);
+      const items = asArray(category.value)
+        .map((value) => parseTechNode(value))
+        .filter((item) => item !== null);
+
+      return {
+        name: label,
+        icon: 'pi pi-cog',
+        items,
+      };
+    })
+    .filter((group) => group.name.length > 0);
+};
+
+const normalizeStackElements = (elements, fallbackGroups) => {
+  const list = asArray(elements);
+  const first = list[0];
+  if (first && first.type === 'grid-tree' && Array.isArray(first.groups)) {
+    return [{ type: 'grid-tree', groups: first.groups, gridLayout: first.gridLayout || 'compact' }];
+  }
+
+  const convertedGroups = toStackGroupsFromGridTech(list);
+  if (convertedGroups.length > 0) {
+    return [{ type: 'grid-tree', groups: convertedGroups, gridLayout: 'compact' }];
+  }
+
+  return fallbackGroups.length > 0
+    ? [{ type: 'grid-tree', groups: fallbackGroups, gridLayout: 'compact' }]
+    : [];
+};
+
 const buildFinalPayload = (payload, lang) => {
   const seed = backfillByLang[lang];
   if (!seed) {
@@ -220,13 +292,13 @@ const buildFinalPayload = (payload, lang) => {
     },
   ]);
 
-  const stackFallbackItems = [
-    { label: lang === 'zh_TW' ? '語言' : 'Language', value: asArray(techStack.language), severity: 'info' },
-    { label: lang === 'zh_TW' ? '前端' : 'Frontend', value: asArray(techStack.frontend), severity: 'success' },
-    { label: lang === 'zh_TW' ? '後端' : 'Backend', value: asArray(techStack.backend), severity: 'warning' },
-    { label: lang === 'zh_TW' ? '資料庫' : 'Database', value: asArray(techStack.database), severity: 'danger' },
-    { label: 'DevOps', value: asArray(techStack.devops), severity: 'secondary' },
-  ];
+  const stackFallbackGroups = [
+    { name: lang === 'zh_TW' ? '語言' : 'Language', icon: 'pi pi-code', items: asArray(techStack.language).map((value) => parseTechNode(value)).filter((item) => item !== null) },
+    { name: lang === 'zh_TW' ? '前端' : 'Frontend', icon: 'pi pi-desktop', items: asArray(techStack.frontend).map((value) => parseTechNode(value)).filter((item) => item !== null) },
+    { name: lang === 'zh_TW' ? '後端' : 'Backend', icon: 'pi pi-server', items: asArray(techStack.backend).map((value) => parseTechNode(value)).filter((item) => item !== null) },
+    { name: lang === 'zh_TW' ? '資料庫' : 'Database', icon: 'pi pi-database', items: asArray(techStack.database).map((value) => parseTechNode(value)).filter((item) => item !== null) },
+    { name: 'DevOps', icon: 'pi pi-cog', items: asArray(techStack.devops).map((value) => parseTechNode(value)).filter((item) => item !== null) },
+  ].filter((group) => group.items.length > 0);
 
   const projectsGroups = normalizeGroups(
     elementGroups(projectsCard).length > 0
@@ -306,10 +378,7 @@ const buildFinalPayload = (payload, lang) => {
         },
         {
           id: 'stack',
-          elements: pickElements(
-            stackCard.elements,
-            [{ type: 'grid-tech', items: stackFallbackItems, gridLayout: 'compact' }],
-          ),
+          elements: normalizeStackElements(stackCard.elements, stackFallbackGroups),
         },
         {
           id: 'projects',

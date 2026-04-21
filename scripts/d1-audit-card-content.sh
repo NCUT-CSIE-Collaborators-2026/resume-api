@@ -14,7 +14,7 @@ if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
   exit 1
 fi
 
-audit_json="$(npx wrangler d1 execute resume-api-db --remote --command "SELECT lang_code, json_extract(payload, '$.card_content.cards[0].name') AS profile_name, json_extract(payload, '$.card_content.cards[0].headline') AS profile_headline, json_extract(payload, '$.card_content.cards[0].subtitle') AS profile_subtitle, json_extract(payload, '$.card_content.cards[1].text') AS intro30_text, json_extract(payload, '$.card_content.cards[2].text') AS intro60_text, json_array_length(payload, '$.card_content.cards[3].elements[0].groups') AS education_groups_count, json_array_length(payload, '$.card_content.cards[4].elements[0].groups') AS experience_groups_count, json_array_length(payload, '$.card_content.cards[5].elements[0].items') AS stack_items_count, json_extract(payload, '$.card_content.cards[6].title') AS projects_title, json_array_length(payload, '$.card_content.cards[6].elements[0].groups') AS projects_groups_count, json_extract(payload, '$.card_content.cards[7].title') AS verify_title, COALESCE(json_array_length(payload, '$.card_content.cards[7].elements[0].groups'), json_array_length(payload, '$.card_content.cards[7].elements[0].items'), 0) AS verify_entries_count FROM resume_i18n_content ORDER BY lang_code;" --json)"
+audit_json="$(npx wrangler d1 execute resume-api-db --remote --command "SELECT lang_code, json_extract(payload, '$.card_content.cards[0].name') AS profile_name, json_extract(payload, '$.card_content.cards[0].headline') AS profile_headline, json_extract(payload, '$.card_content.cards[0].subtitle') AS profile_subtitle, json_extract(payload, '$.card_content.cards[1].text') AS intro30_text, json_extract(payload, '$.card_content.cards[2].text') AS intro60_text, json_array_length(payload, '$.card_content.cards[3].elements[0].groups') AS education_groups_count, json_array_length(payload, '$.card_content.cards[4].elements[0].groups') AS experience_groups_count, COALESCE(json_array_length(payload, '$.card_content.cards[5].elements[0].groups'), json_array_length(payload, '$.card_content.cards[5].elements[0].items'), 0) AS stack_entries_count, json_extract(payload, '$.card_content.cards[6].title') AS projects_title, json_array_length(payload, '$.card_content.cards[6].elements[0].groups') AS projects_groups_count, json_extract(payload, '$.card_content.cards[7].title') AS verify_title, COALESCE(json_array_length(payload, '$.card_content.cards[7].elements[0].groups'), json_array_length(payload, '$.card_content.cards[7].elements[0].items'), 0) AS verify_entries_count FROM resume_i18n_content ORDER BY lang_code;" --json)"
 
 node --input-type=module - "$audit_json" <<'NODE'
 const raw = process.argv[2] ?? '[]';
@@ -43,7 +43,7 @@ for (const row of resultRows) {
   if (!toText(row.verify_title)) issues.push(`${lang}: missing verify_title`);
   if (toCount(row.education_groups_count) <= 0) issues.push(`${lang}: education groups empty`);
   if (toCount(row.experience_groups_count) <= 0) issues.push(`${lang}: experience groups empty`);
-  if (toCount(row.stack_items_count) <= 0) issues.push(`${lang}: stack items empty`);
+  if (toCount(row.stack_entries_count) <= 0) issues.push(`${lang}: stack entries empty`);
   if (toCount(row.projects_groups_count) <= 0) issues.push(`${lang}: projects groups empty`);
   if (toCount(row.verify_entries_count) <= 0) issues.push(`${lang}: verify entries empty`);
 }

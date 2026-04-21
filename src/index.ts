@@ -23,6 +23,7 @@ type EditableCardRequest = {
   introMode?: "30" | "60";
   card: {
     id: string;
+    type: string;
     title?: string;
     subtitle?: string;
     elements?: Array<Record<string, unknown>>;
@@ -45,6 +46,7 @@ const requireEnv = (value: string | undefined, name: string): string => {
 
 type StoredCardContentEntry = {
   id: string;
+  type: string;
   title?: string;
   subtitle?: string;
   name?: string;
@@ -469,7 +471,7 @@ const isAllowedLoginEmail = async (
 ): Promise<boolean> => {
   const row = await db
     .prepare(
-      "SELECT lang_code FROM resume_i18n_content WHERE EXISTS (SELECT 1 FROM json_each(json_extract(payload, '$.card_content.cards')) AS card WHERE lower(json_extract(card.value, '$.id')) = 'profile' AND lower(json_extract(card.value, '$.elements[0].items[3]')) = lower(?)) LIMIT 1",
+      "SELECT lang_code FROM resume_i18n_content WHERE EXISTS (SELECT 1 FROM json_each(json_extract(payload, '$.card_content.cards')) AS card WHERE lower(json_extract(card.value, '$.type')) = 'profile' AND lower(json_extract(card.value, '$.elements[0].items[3]')) = lower(?)) LIMIT 1",
     )
     .bind(email)
     .first<{ lang_code: string }>();
@@ -558,11 +560,7 @@ const parseTreeGroups = (
 };
 
 const getStoredCardContentKey = (request: EditableCardRequest): string => {
-  if (request.card.id === "intro") {
-    return request.introMode === "30" ? "intro_30" : "intro_60";
-  }
-
-  return request.card.id;
+  return request.card.id.trim();
 };
 
 const normalizeStoredCardContentEntries = (
@@ -579,10 +577,14 @@ const normalizeStoredCardContentEntries = (
       }
 
       const record = entry as Record<string, unknown>;
-      const id = typeof record.id === "string" ? record.id.trim() : "";
-      if (!id) {
+      const typeValue =
+        typeof record.type === "string" && record.type.trim().length > 0
+          ? record.type.trim()
+          : "";
+      if (!typeValue) {
         return null;
       }
+      const id = typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : typeValue;
 
       const topics = Array.isArray(record.topics)
         ? record.topics
@@ -593,6 +595,7 @@ const normalizeStoredCardContentEntries = (
 
       return {
         id,
+        type: typeValue,
         title:
           typeof record.title === "string" && record.title.trim().length > 0
             ? record.title.trim()
@@ -650,6 +653,7 @@ const storeCardContentSnapshot = (
 
   const nextEntry: StoredCardContentEntry = {
     id: key,
+    type: request.card.type.trim(),
     ...(typeof existingEntry?.name === "string" ? { name: existingEntry.name } : {}),
     ...(typeof existingEntry?.headline === "string" ? { headline: existingEntry.headline } : {}),
     ...(typeof existingEntry?.text === "string" ? { text: existingEntry.text } : {}),
@@ -665,21 +669,6 @@ const storeCardContentSnapshot = (
       .filter((value) => value.length > 0),
     elements: safeElements,
   };
-
-  if (request.card.id === "intro") {
-    const textElement = safeElements.find(
-      (element) =>
-        typeof element === "object" &&
-        element !== null &&
-        (element as Record<string, unknown>).type === "text" &&
-        typeof (element as Record<string, unknown>).text === "string",
-    ) as Record<string, unknown> | undefined;
-
-    const introText = typeof textElement?.text === "string" ? textElement.text.trim() : "";
-    if (introText.length > 0) {
-      nextEntry.text = introText;
-    }
-  }
 
   const nextCards = upsertStoredCardContentEntry(
     normalizeStoredCardContentEntries(cardContent.cards),
@@ -700,33 +689,6 @@ const applyEditableCardUpdate = (
 
   // Persist a full snapshot for flexible card structures.
   storeCardContentSnapshot(payload, request, elements);
-
-  if (card.id === "profile") {
-    return;
-  }
-
-  if (card.id === "intro") {
-    return;
-  }
-
-  if (card.id === "education") {
-    return;
-  }
-
-  if (card.id === "experience") {
-    return;
-  }
-
-  if (card.id === "stack") {
-    return;
-  }
-
-  if (card.id === "projects") {
-    return;
-  }
-
-  if (card.id === "verify") {
-  }
 };
 
 const getGoogleOAuthConfig = (
