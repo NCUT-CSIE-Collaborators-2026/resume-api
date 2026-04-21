@@ -385,57 +385,20 @@ export const authService = {
   async googleCallback(c: AppContext) {
     // 回呼：驗證 state -> 交換 code -> 取得 profile -> 發放 session cookie。
     const requestUrl = new URL(c.req.url);
-    const debugMode =
-      requestUrl.searchParams.get("debug") === "1" ||
-      c.env.GOOGLE_OAUTH_DEBUG_RESPONSE?.trim() === "true";
 
     const redirectToFailure = (
       errorCode: string,
       fallbackBody: Record<string, unknown>,
       fallbackStatus: 400 | 401 | 403 | 500,
     ): Response => {
-      if (debugMode) {
-        return c.json(
-          {
-            ...fallbackBody,
-            login: "failed",
-            error: errorCode,
-          },
-          fallbackStatus,
-        );
-      }
-
-      const failureRedirect = c.env.GOOGLE_OAUTH_FAILURE_REDIRECT?.trim();
-      if (!failureRedirect) {
-        return c.json(fallbackBody, fallbackStatus);
-      }
-
-      let failureUrl: URL;
-      try {
-        failureUrl = new URL(failureRedirect);
-      } catch {
-        return c.json(
-          { message: "Configured failure redirect is not a valid URL" },
-          500,
-        );
-      }
-
-      const allowedOrigins = new Set(
-        configService.getAllowedRedirectOrigins(c.env),
+      return c.json(
+        {
+          ...fallbackBody,
+          login: "failed",
+          error: errorCode,
+        },
+        fallbackStatus,
       );
-      if (!allowedOrigins.has(failureUrl.origin)) {
-        return c.json(
-          {
-            message:
-              "Configured failure redirect target is not allowed by CORS_ORIGINS",
-          },
-          500,
-        );
-      }
-
-      failureUrl.searchParams.set("login", "failed");
-      failureUrl.searchParams.set("error", errorCode);
-      return c.redirect(failureUrl.toString(), 302);
     };
 
     const config = getGoogleOAuthConfig(c.env);
@@ -602,23 +565,6 @@ export const authService = {
           },
           500,
         );
-      }
-      if (debugMode) {
-        const response = c.json(
-          {
-            login: "success",
-            email,
-            tokenLength: sessionToken.length,
-            secure: useSecureCookie,
-            redirectUrl: redirectUrl.toString(),
-          },
-          200,
-        );
-        response.headers.set(
-          "Set-Cookie",
-          buildSessionCookie(sessionToken, useSecureCookie),
-        );
-        return response;
       }
 
       redirectUrl.searchParams.set("login", "success");
