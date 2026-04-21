@@ -258,9 +258,8 @@ export const validateSignedState = async (
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const ageSeconds = now - expirationTimestamp;
 
-  if (ageSeconds < 0 || ageSeconds > OAUTH_STATE_TTL_SECONDS) {
+  if (now > expirationTimestamp) {
     return { ok: false, reason: "state_expired" };
   }
 
