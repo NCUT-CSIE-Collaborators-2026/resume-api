@@ -575,7 +575,24 @@ export const authService = {
       return c.json({ authenticated: false, reason: "no_session_cookie" }, 200);
     }
 
-    const verification = await verifyJwt(sessionToken, jwtSecret);
+    let verification: {
+      valid: boolean;
+      reason?: string;
+      payload?: Record<string, unknown>;
+    };
+    try {
+      verification = await verifyJwt(sessionToken, jwtSecret);
+    } catch {
+      return c.json(
+        {
+          authenticated: false,
+          reason: "session_verification_error",
+          message: "Session verification failed unexpectedly",
+        },
+        200,
+      );
+    }
+
     if (!verification.valid) {
       return c.json({ authenticated: false, reason: verification.reason }, 200);
     }

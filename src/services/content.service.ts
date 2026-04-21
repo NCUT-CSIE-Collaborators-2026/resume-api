@@ -200,7 +200,17 @@ export const contentService = {
       return c.json({ ok: false, message: "Not authenticated" }, 401);
     }
 
-    const verification = await verifyJwt(sessionToken, c.env.JWT_SECRET);
+    let verification: {
+      valid: boolean;
+      reason?: string;
+      payload?: Record<string, unknown>;
+    };
+    try {
+      verification = await verifyJwt(sessionToken, c.env.JWT_SECRET);
+    } catch {
+      return c.json({ ok: false, message: "Session verification error" }, 401);
+    }
+
     if (!verification.valid) {
       return c.json({ ok: false, message: "Invalid session" }, 401);
     }
