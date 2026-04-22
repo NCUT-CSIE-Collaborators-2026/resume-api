@@ -12,6 +12,9 @@ GOOGLE_REDIRECT_URI = "https://resume-api-haolun-wang.9b117201.workers.dev/api/r
 GOOGLE_OAUTH_SUCCESS_REDIRECT = "https://haolun-wang.pages.dev"
 GOOGLE_OAUTH_FAILURE_REDIRECT = "https://haolun-wang.pages.dev"
 GOOGLE_OAUTH_DEBUG_RESPONSE = "false"
+DEV_MODE = "false"
+DEV_USER_EMAIL = "dev@example.com"
+DEV_USER_NAME = "Dev User"
 
 [env.production.vars]
 GOOGLE_OAUTH_SUCCESS_REDIRECT = "https://haolun-wang.pages.dev"
