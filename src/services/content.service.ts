@@ -141,13 +141,160 @@ const storeCardContentSnapshot = (
   payload.card_content = cardContent;
 };
 
+const mapTreeNode = (node: unknown): Record<string, unknown> | null => {
+  if (typeof node !== "object" || node === null) {
+    return null;
+  }
+
+  const record = node as Record<string, unknown>;
+  const value = typeof record.value === "string" ? record.value : "";
+  if (!value.trim()) {
+    return null;
+  }
+
+  const children = Array.isArray(record.children)
+    ? record.children
+        .map((child) => mapTreeNode(child))
+        .filter((child): child is Record<string, unknown> => child !== null)
+    : [];
+
+  return {
+    type: "node",
+    name: value,
+    icon: typeof record.icon === "string" ? record.icon : "pi pi-circle",
+    ...(children.length > 0 ? { items: children } : {}),
+  };
+};
+
+const mapCardElementsToLegacyItems = (
+  elements: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> => {
+  if (elements.length === 0) {
+    return [];
+  }
+
+  const first = elements[0];
+  const elementType = typeof first.type === "string" ? first.type : "";
+
+  if (elementType === "grid-tree") {
+    const groups = Array.isArray(first.groups) ? first.groups : [];
+    const mapped: Array<Record<string, unknown>> = [];
+    for (const group of groups) {
+      if (typeof group !== "object" || group === null) {
+        continue;
+      }
+
+      const groupRecord = group as Record<string, unknown>;
+      const name = typeof groupRecord.name === "string" ? groupRecord.name : "";
+      if (!name.trim()) {
+        continue;
+      }
+
+      const items = Array.isArray(groupRecord.items)
+        ? groupRecord.items
+            .map((item) => mapTreeNode(item))
+            .filter((item): item is Record<string, unknown> => item !== null)
+        : [];
+
+      mapped.push({
+        type: "node",
+        name,
+        icon:
+          typeof groupRecord.icon === "string"
+            ? groupRecord.icon
+            : "pi pi-folder-open",
+        items,
+      });
+    }
+
+    return mapped;
+  }
+
+  if (elementType === "node-card") {
+    const items = Array.isArray(first.items) ? first.items : [];
+    return JSON.parse(JSON.stringify(items)) as Array<Record<string, unknown>>;
+  }
+
+  if (elementType === "badges") {
+    const items = Array.isArray(first.items) ? first.items : [];
+    return items
+      .filter((item): item is string => typeof item === "string")
+      .map((name) => ({ type: "badge", name }));
+  }
+
+  if (elementType === "text") {
+    return [
+      {
+        type: "text",
+        name: typeof first.text === "string" ? first.text : "",
+      },
+    ];
+  }
+
+  if (elementType === "icon-list") {
+    const items = Array.isArray(first.items) ? first.items : [];
+    const icon = typeof first.icon === "string" ? first.icon : "pi pi-circle";
+    return items
+      .filter((item): item is string => typeof item === "string")
+      .map((name) => ({ type: "node", name, icon }));
+  }
+
+  return JSON.parse(JSON.stringify(elements)) as Array<Record<string, unknown>>;
+};
+
 const applyEditableCardUpdate = (
-  payload: Record<string, unknown>,
+  payload: unknown,
   request: EditableCardRequest,
 ): void => {
   const card = request.card;
+  const cardId = card.id.trim();
   const elements = Array.isArray(card.elements) ? card.elements : [];
-  storeCardContentSnapshot(payload, request, elements);
+
+  // 現行 DB payload 為陣列節點格式（name/items），更新時要回寫到該格式。
+  if (Array.isArray(payload)) {
+    const list = payload as Array<Record<string, unknown>>;
+    const cardIndex = list.findIndex(
+      (item) => typeof item === "object" && item !== null && item.id === cardId,
+    );
+
+    if (cardIndex === -1) {
+      throw new Error(`Card '${cardId}' not found in payload`);
+    }
+
+    const targetCard = list[cardIndex];
+    targetCard.id = cardId;
+    targetCard.type = card.type.trim();
+    if (typeof card.title === "string") {
+      targetCard.name = card.title;
+    }
+    if (typeof card.subtitle === "string") {
+      targetCard.subtitle = card.subtitle;
+    }
+
+    // 清除先前誤寫入的新格式欄位，避免 legacy payload 出現混合格式。
+    delete targetCard.title;
+    delete targetCard.elements;
+    delete targetCard.layout;
+
+    targetCard.items = mapCardElementsToLegacyItems(elements);
+    return;
+  } else if (typeof payload === "object" && payload !== null) {
+    // 兼容舊 object payload 寫法。
+    const objectPayload = payload as Record<string, unknown>;
+    objectPayload[cardId] = {
+      id: cardId,
+      type: card.type.trim(),
+      ...(typeof card.title === "string" ? { title: card.title } : {}),
+      ...(typeof card.subtitle === "string" ? { subtitle: card.subtitle } : {}),
+      ...(typeof card.layout === "number" ? { layout: card.layout } : {}),
+      elements: elements,
+    };
+
+    storeCardContentSnapshot(objectPayload, request, elements);
+    return;
+  }
+
+  throw new Error("Unsupported payload format");
 };
 
 export const contentService = {
@@ -240,9 +387,9 @@ export const contentService = {
       return c.json({ ok: false, message: "Locale not found" }, 404);
     }
 
-    let payload: Record<string, unknown>;
+    let payload: unknown;
     try {
-      payload = JSON.parse(row.payload) as Record<string, unknown>;
+      payload = JSON.parse(row.payload) as unknown;
     } catch {
       return c.json({ ok: false, message: "Stored payload is invalid JSON" }, 500);
     }

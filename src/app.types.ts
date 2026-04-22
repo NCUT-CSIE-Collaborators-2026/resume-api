@@ -25,6 +25,7 @@ export type EditableCardRequest = {
     type: string;
     title?: string;
     subtitle?: string;
+    layout?: number;
     elements?: Array<Record<string, unknown>>;
   };
 };
