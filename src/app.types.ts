@@ -10,6 +10,9 @@ export type Env = {
   GOOGLE_OAUTH_FAILURE_REDIRECT?: string;
   GOOGLE_OAUTH_DEBUG_RESPONSE?: string;
   JWT_SECRET?: string;
+  DEV_MODE?: string;
+  DEV_USER_EMAIL?: string;
+  DEV_USER_NAME?: string;
 };
 
 export type LangCode = "en" | "zh_TW";

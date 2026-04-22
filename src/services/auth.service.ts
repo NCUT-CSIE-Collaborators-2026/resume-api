@@ -327,6 +327,49 @@ export const authService = {
   OAUTH_STATE_TTL_SECONDS,
 
   async googleLogin(c: AppContext) {
+    // DEV 模式快速认证：跳过 Google OAuth，直接返回 JWT
+    const isDevMode = c.env.DEV_MODE?.trim().toLowerCase() === "true";
+    if (isDevMode) {
+      const jwtSecret = c.env.JWT_SECRET?.trim();
+      if (!jwtSecret) {
+        return c.json({ message: "Missing JWT_SECRET in DEV mode" }, 500);
+      }
+
+      const configuredSuccessRedirect =
+        c.env.GOOGLE_OAUTH_SUCCESS_REDIRECT?.trim();
+      if (!configuredSuccessRedirect) {
+        return c.json(
+          { message: "Missing GOOGLE_OAUTH_SUCCESS_REDIRECT" },
+          500,
+        );
+      }
+
+      const devEmail = c.env.DEV_USER_EMAIL?.trim() || "dev@example.com";
+      const devName = c.env.DEV_USER_NAME?.trim() || "Dev User";
+
+      // 生成 JWT payload
+      const now = Math.floor(Date.now() / 1000);
+      const payload: JwtPayload = {
+        sub: devEmail,
+        email: devEmail,
+        name: devName,
+        iat: now,
+        exp: now + SESSION_TTL_SECONDS,
+      };
+
+      const token = await createJwt(payload, jwtSecret);
+      const useSecureCookie = isHttpsRequest(
+        c.req.url,
+        c.req.header("X-Forwarded-Proto"),
+      );
+      const cookieHeader = buildSessionCookie(token, useSecureCookie);
+
+      // 重定向到成功页面并设置 session cookie
+      const response = c.redirect(configuredSuccessRedirect, 302);
+      response.headers.set("Set-Cookie", cookieHeader);
+      return response;
+    }
+
     // 入口：建立 OAuth 授權 URL，並導向 Google。
     const config = getGoogleOAuthConfig(c.env);
     if (!config) {
