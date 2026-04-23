@@ -249,6 +249,18 @@ const applyEditableCardUpdate = (
   const card = request.card;
   const cardId = card.id.trim();
   const elements = Array.isArray(card.elements) ? card.elements : [];
+  const legacyItems = Array.isArray(card.items)
+    ? (JSON.parse(JSON.stringify(card.items)) as Array<Record<string, unknown>>)
+    : [];
+  const nextName =
+    typeof card.title === "string"
+      ? card.title
+      : typeof card.name === "string"
+        ? card.name
+        : undefined;
+  const nextItems = Array.isArray(card.items)
+    ? legacyItems
+    : mapCardElementsToLegacyItems(elements);
 
   // 現行 DB payload 為陣列節點格式（name/items），更新時要回寫到該格式。
   if (Array.isArray(payload)) {
@@ -264,8 +276,8 @@ const applyEditableCardUpdate = (
     const targetCard = list[cardIndex];
     targetCard.id = cardId;
     targetCard.type = card.type.trim();
-    if (typeof card.title === "string") {
-      targetCard.name = card.title;
+    if (typeof nextName === "string") {
+      targetCard.name = nextName;
     }
     if (typeof card.subtitle === "string") {
       targetCard.subtitle = card.subtitle;
@@ -276,7 +288,7 @@ const applyEditableCardUpdate = (
     delete targetCard.elements;
     delete targetCard.layout;
 
-    targetCard.items = mapCardElementsToLegacyItems(elements);
+    targetCard.items = nextItems;
     return;
   } else if (typeof payload === "object" && payload !== null) {
     // 兼容舊 object payload 寫法。
@@ -284,10 +296,10 @@ const applyEditableCardUpdate = (
     objectPayload[cardId] = {
       id: cardId,
       type: card.type.trim(),
-      ...(typeof card.title === "string" ? { title: card.title } : {}),
+      ...(typeof nextName === "string" ? { title: nextName } : {}),
       ...(typeof card.subtitle === "string" ? { subtitle: card.subtitle } : {}),
       ...(typeof card.layout === "number" ? { layout: card.layout } : {}),
-      elements: elements,
+      ...(Array.isArray(card.items) ? { items: legacyItems } : { elements }),
     };
 
     storeCardContentSnapshot(objectPayload, request, elements);
