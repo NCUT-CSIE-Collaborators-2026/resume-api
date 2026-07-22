@@ -1,4 +1,4 @@
-name = "resume-api"
+name = "resume-api-haolun-wang"
 main = "src/index.ts"
 compatibility_date = "2026-03-27"
 workers_dev = true
